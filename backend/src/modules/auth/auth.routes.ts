@@ -87,6 +87,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       sendResetPasswordEmail(user.email, resetUrl).catch((err) =>
         request.log.error({ err }, "No se pudo enviar el email de recuperación"),
       );
+    } else {
+      request.log.info("forgot-password: no hay usuario con ese email, no se envía correo");
     }
     // Misma respuesta exista o no el usuario (evita enumeración).
     return { message: FORGOT_MESSAGE };

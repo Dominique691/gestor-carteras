@@ -68,6 +68,9 @@ export async function sendResetPasswordEmail(email: string, resetUrl: string): P
     text: `Para restablecer tu contraseña abre este enlace (caduca en 15 minutos): ${resetUrl}`,
     html: resetPasswordHtml(resetUrl),
   });
+  console.info(
+    `[email] Enviado a ${email}: id=${info.messageId} aceptados=${JSON.stringify(info.accepted)} rechazados=${JSON.stringify(info.rejected)} respuesta="${info.response}"`,
+  );
   const preview = nodemailer.getTestMessageUrl(info);
   if (preview) console.info(`[email] Vista previa (Ethereal): ${preview}`);
 }
