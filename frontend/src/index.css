@@ -127,4 +127,42 @@
   html {
     @apply font-sans;
     }
+
+  /* Cursor de mano y transición suave en todo lo clicable (Tailwind lo deja en "default"). */
+  button:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  summary,
+  label[for],
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="option"],
+  [role="tab"] {
+    cursor: pointer;
+  }
+  button,
+  a[href],
+  select,
+  [role="button"],
+  [role="menuitem"],
+  [role="option"] {
+    transition-property: all;
+    transition-duration: 200ms;
+    transition-timing-function: ease-in-out;
+  }
+  button:disabled,
+  select:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button,
+    a[href],
+    select,
+    [role="button"],
+    [role="menuitem"],
+    [role="option"] {
+      transition-duration: 0.01ms;
+    }
+  }
 }
