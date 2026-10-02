@@ -78,7 +78,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
-      const baseUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
+      const baseUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/+$/, "");
       const resetUrl = `${baseUrl}/reset-password?token=${token}`;
       if (process.env.NODE_ENV !== "production") {
         request.log.info(`Enlace de restablecimiento para ${user.email}: ${resetUrl}`);

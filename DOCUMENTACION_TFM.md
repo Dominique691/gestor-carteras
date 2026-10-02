@@ -9,6 +9,7 @@ Este documento describe la arquitectura, el modelo de datos, la interfaz de prog
 3. [Especificación de la API REST](#3-especificación-de-la-api-rest)
 4. [Algoritmo de rebalanceo](#4-algoritmo-de-rebalanceo)
 5. [Limitaciones y trabajo futuro](#5-limitaciones-y-trabajo-futuro)
+6. [Guía de Despliegue en la Nube](#6-guía-de-despliegue-en-la-nube)
 
 ---
 
@@ -883,3 +884,90 @@ Observaciones:
 - **Historial de transacciones.** El Dashboard muestra el historial completo, pero sin filtros por fondo, tipo o fechas, y las operaciones registradas no pueden editarse ni anularse. Una mejora natural es añadir filtros, paginación en servidor y la corrección de operaciones erróneas.
 - **Evolución temporal.** No se almacena la serie histórica del patrimonio; añadirla permitiría mostrar gráficos de evolución y rentabilidades anualizadas.
 - **Divisa y fiscalidad.** El sistema trabaja en euros y no modela comisiones ni impuestos.
+
+---
+
+## 6. Guía de Despliegue en la Nube
+
+Esta guía publica la aplicación con servicios que tienen plan gratuito: **Neon** (PostgreSQL), **Render** (backend) y **Vercel** (frontend). Con el código ya subido a GitHub, lleva unos 10 minutos. El orden importa: cada servicio necesita la URL del anterior.
+
+| Servicio | Qué aloja | Variables que necesita |
+|---|---|---|
+| Neon | Base de datos | — (genera `DATABASE_URL`) |
+| Render | API Fastify | `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL` |
+| Vercel | Frontend React | `VITE_API_URL` |
+
+### 6.1 Base de datos en Neon (2 min)
+
+1. Crea una cuenta en [neon.tech](https://neon.tech) y un proyecto nuevo (región cercana a la de Render, p. ej. Fráncfurt).
+2. En **Connect**, copia la cadena de conexión **directa** (sin `-pooler` en el host). Termina en `?sslmode=require`.
+3. Crea las tablas desde tu máquina, con esa cadena en `backend/.env` como `DATABASE_URL`:
+
+   ```bash
+   cd backend
+   npx prisma db push
+   npm run db:seed   # opcional: catálogo de fondos y usuario demo
+   ```
+
+   El catálogo de fondos se crea con el seed; sin él, el formulario de transacciones no tendrá fondos que elegir.
+
+### 6.2 Backend en Render (4 min)
+
+1. En [render.com](https://render.com): **New → Web Service** y conecta el repositorio de GitHub.
+2. Configura:
+
+   | Campo | Valor |
+   |---|---|
+   | Root Directory | `backend` |
+   | Runtime | Node |
+   | Build Command | `npm install && npm run build` |
+   | Start Command | `npm start` |
+
+   `npm run build` ejecuta `prisma generate` (el cliente de Prisma no se versiona) y después `tsc`, que deja el resultado en `dist/`. `npm start` lanza `node dist/server.js`, que escucha en `0.0.0.0` y en el puerto que Render inyecta en `PORT`.
+3. En **Environment**, añade:
+
+   | Variable | Valor |
+   |---|---|
+   | `DATABASE_URL` | La cadena de Neon del paso 6.1 |
+   | `JWT_SECRET` | Un valor largo y aleatorio (`openssl rand -base64 48`) |
+   | `FRONTEND_URL` | Se rellena en el paso 6.4 |
+
+4. Despliega y comprueba que `https://<tu-servicio>.onrender.com/api/health` responde `{"status":"ok"}`.
+
+> En el plan gratuito, Render duerme el servicio tras unos minutos sin tráfico; la primera petición posterior puede tardar hasta un minuto.
+
+### 6.3 Frontend en Vercel (3 min)
+
+1. En [vercel.com](https://vercel.com): **Add New → Project** e importa el mismo repositorio.
+2. Configura **Root Directory** = `frontend`. Vercel detecta Vite (build `npm run build`, salida `dist`).
+3. En **Environment Variables** añade `VITE_API_URL` con la URL de Render, **sin barra final** (p. ej. `https://gestor-api.onrender.com`).
+4. Despliega. El archivo `frontend/vercel.json` redirige todas las rutas a `index.html`, necesario para que funcionen enlaces directos como `/reset-password?token=…`.
+
+### 6.4 Cerrar el círculo: CORS
+
+El backend solo acepta peticiones del origen indicado en `FRONTEND_URL`. Vuelve a Render, define `FRONTEND_URL` con la URL de Vercel (p. ej. `https://gestor-carteras.vercel.app`, sin barra final) y guarda: el servicio se reinicia. Esa misma variable se usa para construir el enlace del correo de recuperación de contraseña.
+
+Si `FRONTEND_URL` no está definida, el backend permite cualquier origen. Es cómodo en desarrollo o demos, pero no debe quedarse así en producción.
+
+### 6.5 Variables de entorno
+
+| Variable | Dónde | Descripción |
+|---|---|---|
+| `DATABASE_URL` | Backend | Cadena de conexión PostgreSQL (Neon, con `sslmode=require`) |
+| `JWT_SECRET` | Backend | Secreto de firma de los tokens; distinto del de desarrollo |
+| `FRONTEND_URL` | Backend | Origen del frontend: CORS y enlaces de los emails |
+| `PORT` | Backend | Lo inyecta Render; en local, 3001 por defecto |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Backend | Opcionales. Sin ellas, el correo de recuperación usa una cuenta de pruebas de Ethereal y no llega a ningún buzón real |
+| `VITE_API_URL` | Frontend | URL pública del backend. Se incrusta al compilar: si la cambias, hay que redesplegar |
+
+Las plantillas están en `backend/.env.example` y `frontend/.env.example`. Los archivos `.env` reales están en `.gitignore` y nunca deben subirse al repositorio.
+
+### 6.6 Solución de problemas
+
+| Síntoma | Causa probable |
+|---|---|
+| Error de CORS en la consola del navegador | `FRONTEND_URL` no coincide exactamente con el origen de Vercel (esquema, subdominio) |
+| El frontend llama a `/api/...` en su propio dominio y da 404 | Falta `VITE_API_URL`; hay que definirla y redesplegar |
+| `500` en login o registro | Las tablas no existen (falta `prisma db push`) o `DATABASE_URL` es incorrecta |
+| `Cannot find module .../generated/prisma` en Render | El Build Command no ejecutó `npm run build` |
+| Primera petición muy lenta | Render está despertando el servicio gratuito |

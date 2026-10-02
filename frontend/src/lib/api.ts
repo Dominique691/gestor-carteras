@@ -1,5 +1,8 @@
 /** Cliente HTTP mínimo para la API del backend (el proxy de Vite redirige /api a :3001). */
 
+/** URL base del backend. Vacía en desarrollo (el proxy de Vite redirige /api); en producción, VITE_API_URL. */
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
+
 export const TOKEN_KEY = "gestor.token";
 
 export interface AuthUser {
@@ -40,7 +43,7 @@ export function getStoredToken(): string | null {
 
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const token = getStoredToken();
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     method: init.method ?? (init.body ? "POST" : "GET"),
     headers: {
       ...(init.body ? { "Content-Type": "application/json" } : {}),
