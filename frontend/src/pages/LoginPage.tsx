@@ -1,6 +1,6 @@
 import { Loader2, TrendingUp } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PasswordStrengthMeter, getPasswordScore } from "@/components/PasswordStrengthMeter";
@@ -86,6 +86,11 @@ export default function LoginPage() {
                 required
               />
               {!isLogin && <PasswordStrengthMeter password={password} />}
+              {isLogin && (
+                <Link to="/forgot-password" className="block text-right text-xs text-primary hover:underline">
+                  ¿Olvidaste tu contraseña?
+                </Link>
+              )}
             </div>
             {error && (
               <p role="alert" className="text-sm text-destructive">

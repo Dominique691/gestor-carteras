@@ -31,3 +31,16 @@ export interface JwtPayload {
   sub: string;
   email: string;
 }
+
+export interface ForgotPasswordRequestDto {
+  email: string;
+}
+
+export interface ResetPasswordRequestDto {
+  token: string;
+  newPassword: string;
+}
+
+export interface MessageResponseDto {
+  message: string;
+}

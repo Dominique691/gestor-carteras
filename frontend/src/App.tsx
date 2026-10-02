@@ -2,14 +2,18 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppLayout } from "@/components/AppLayout";
 import { GuestRoute, ProtectedRoute } from "@/components/RouteGuards";
 import Dashboard from "@/pages/Dashboard";
+import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 import LoginPage from "@/pages/LoginPage";
 import Rebalance from "@/pages/Rebalance";
+import ResetPasswordPage from "@/pages/ResetPasswordPage";
 
 export default function App() {
   return (
     <Routes>
       <Route element={<GuestRoute />}>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
       </Route>
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>

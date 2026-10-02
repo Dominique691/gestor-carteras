@@ -13,6 +13,10 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
+  /// SHA-256 del token de recuperación enviado por email (nunca se guarda el token en claro).
+  resetPasswordToken   String?   @unique
+  resetPasswordExpires DateTime?
+
   transactions      Transaction[]
   targetAllocations TargetAllocation[]
 }
