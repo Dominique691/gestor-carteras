@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Loader2, Minus, RefreshCw } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Coins, Loader2, Minus, PiggyBank, RefreshCw, TrendingUp, Wallet, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { toast } from "sonner";
@@ -22,17 +22,37 @@ import {
 import type { Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const CATEGORY_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444"];
+// Paleta fintech: índigo para renta variable y teal para renta fija; el resto, colores de reserva.
+const FALLBACK_COLORS = ["#f59e0b", "#8b5cf6", "#ef4444", "#0ea5e9"];
+function categoryColor(name: string, index: number) {
+  if (/variable/i.test(name)) return "#6366f1";
+  if (/fija/i.test(name)) return "#14b8a6";
+  return FALLBACK_COLORS[index % FALLBACK_COLORS.length];
+}
 
-function PnlText({ value, children, className }: { value: number; children: ReactNode; className?: string }) {
+function PnlText({
+  value,
+  children,
+  className,
+  pill,
+}: {
+  value: number;
+  children: ReactNode;
+  className?: string;
+  pill?: boolean;
+}) {
   const Icon = value > 0 ? ArrowUpRight : value < 0 ? ArrowDownRight : Minus;
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 font-medium",
-        value > 0 && "text-emerald-600 dark:text-emerald-400",
-        value < 0 && "text-red-600 dark:text-red-400",
+        value > 0 && "text-emerald-700 dark:text-emerald-400",
+        value < 0 && "text-red-700 dark:text-red-400",
         value === 0 && "text-muted-foreground",
+        pill && "rounded-full px-2.5 py-0.5",
+        pill && value > 0 && "bg-emerald-50 dark:bg-emerald-950/50",
+        pill && value < 0 && "bg-red-50 dark:bg-red-950/50",
+        pill && value === 0 && "bg-muted",
         className,
       )}
     >
@@ -42,9 +62,12 @@ function PnlText({ value, children, className }: { value: number; children: Reac
   );
 }
 
-function Kpi({ title, children, sub }: { title: string; children: ReactNode; sub?: ReactNode }) {
+function Kpi({ title, icon: Icon, children, sub }: { title: string; icon: LucideIcon; children: ReactNode; sub?: ReactNode }) {
   return (
-    <Card>
+    <Card className="relative">
+      <span className="absolute top-3 right-3 flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary" aria-hidden>
+        <Icon className="size-4" />
+      </span>
       <CardHeader>
         <CardDescription>{title}</CardDescription>
         <CardTitle className="text-2xl tabular-nums">{children}</CardTitle>
@@ -170,15 +193,15 @@ export default function Dashboard() {
       {portfolio && (
         <>
           <section aria-label="Indicadores" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Kpi title="Patrimonio total">{formatEur(portfolio.totalValue)}</Kpi>
-            <Kpi title="Inversión total">{formatEur(portfolio.totalInvested)}</Kpi>
-            <Kpi title="Ganancia / Pérdida">
-              <PnlText value={portfolio.pnl} className="text-2xl">
+            <Kpi title="Patrimonio total" icon={Wallet}>{formatEur(portfolio.totalValue)}</Kpi>
+            <Kpi title="Inversión total" icon={PiggyBank}>{formatEur(portfolio.totalInvested)}</Kpi>
+            <Kpi title="Ganancia / Pérdida" icon={Coins}>
+              <PnlText value={portfolio.pnl} pill className="text-xl">
                 {formatEurSigned(portfolio.pnl)}
               </PnlText>
             </Kpi>
-            <Kpi title="Rentabilidad">
-              <PnlText value={portfolio.pnlPercentage} className="text-2xl">
+            <Kpi title="Rentabilidad" icon={TrendingUp}>
+              <PnlText value={portfolio.pnlPercentage} pill className="text-xl">
                 {formatPercentSigned(portfolio.pnlPercentage)}
               </PnlText>
             </Kpi>
@@ -201,7 +224,7 @@ export default function Dashboard() {
                   <CardDescription>Peso de cada categoría sobre el valor de la cartera</CardDescription>
                 </CardHeader>
                 <CardContent className="grid items-center gap-6 md:grid-cols-2">
-                  <div className="h-64" role="img" aria-label="Gráfico circular de distribución por categoría">
+                  <div className="relative h-64" role="img" aria-label="Gráfico circular de distribución por categoría">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -213,19 +236,23 @@ export default function Dashboard() {
                           paddingAngle={2}
                         >
                           {byCategory.map((c, i) => (
-                            <Cell key={c.name} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />
+                            <Cell key={c.name} fill={categoryColor(c.name, i)} />
                           ))}
                         </Pie>
                         <Tooltip formatter={(v) => formatEur(Number(v))} />
                       </PieChart>
                     </ResponsiveContainer>
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center" data-testid="donut-center">
+                      <span className="text-xs text-muted-foreground">Patrimonio</span>
+                      <span className="text-lg font-semibold tabular-nums">{formatEur(portfolio.totalValue)}</span>
+                    </div>
                   </div>
                   <ul className="space-y-3" aria-label="Leyenda de categorías">
                     {byCategory.map((c, i) => (
                       <li key={c.name} className="flex items-center gap-3 text-sm">
                         <span
                           className="size-3 rounded-full"
-                          style={{ backgroundColor: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }}
+                          style={{ backgroundColor: categoryColor(c.name, i) }}
                           aria-hidden
                         />
                         <span className="flex-1 font-medium">{c.name}</span>
@@ -258,12 +285,12 @@ export default function Dashboard() {
                     </TableHeader>
                     <TableBody>
                       {portfolio.positions.map((p) => (
-                        <TableRow key={p.fundId}>
+                        <TableRow key={p.fundId} className="odd:bg-slate-50/50 dark:odd:bg-slate-900/50">
                           <TableCell className="min-w-56 whitespace-normal font-medium">
                             {p.name}
                             <div className="text-xs font-normal text-muted-foreground">{p.category}</div>
                           </TableCell>
-                          <TableCell className="font-mono text-xs">{p.isin}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{p.isin}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatShares(p.shares)}</TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatPrice(p.currentNAV)}

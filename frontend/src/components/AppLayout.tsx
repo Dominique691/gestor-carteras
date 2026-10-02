@@ -15,7 +15,7 @@ export function AppLayout() {
   const { user, logout } = useAuth();
 
   return (
-    <div className="min-h-screen bg-muted/30">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <header className="border-b bg-background">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:gap-6">
           <div className="flex shrink-0 items-center gap-2 font-semibold">
