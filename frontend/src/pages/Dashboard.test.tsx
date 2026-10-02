@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fmt from "@/lib/format";
+import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import type { Fund, Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
 import Dashboard from "./Dashboard";
@@ -200,10 +201,10 @@ const tx = (n: number, over: Partial<TransactionItem> = {}): TransactionItem => 
 
 const renderWithToasts = () =>
   render(
-    <>
+    <ThemeProvider>
       <Dashboard />
       <Toaster />
-    </>,
+    </ThemeProvider>,
   );
 const syncButton = () => screen.findByRole("button", { name: "Actualizar precios de mercado" });
 const syncCalls = (fetchMock: ReturnType<typeof mockApi>) =>

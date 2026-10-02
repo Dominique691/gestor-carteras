@@ -1,5 +1,6 @@
 import { LayoutDashboard, LogOut, Scale, TrendingUp } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
+import { ModeToggle } from "@/components/ModeToggle";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { useAuth } from "@/context/AuthContext";
@@ -42,6 +43,7 @@ export function AppLayout() {
           <Button variant="outline" size="sm" className="shrink-0" onClick={logout}>
             <LogOut /> Salir
           </Button>
+          <ModeToggle />
         </div>
       </header>
       <main className="mx-auto max-w-6xl p-4">
