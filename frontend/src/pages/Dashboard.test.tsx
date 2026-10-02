@@ -70,6 +70,57 @@ describe("Dashboard", () => {
     expect(kpis.getByText(pctSigned(1.83))).toBeInTheDocument();
   });
 
+  /** El valor de un KPI, localizado por la etiqueta de su tarjeta. */
+  const kpi = async (title: string) => {
+    const card = (await screen.findByText(title)).closest("[data-slot=card]") as HTMLElement;
+    return within(card);
+  };
+
+  it("cada importe aparece bajo la etiqueta de su tarjeta", async () => {
+    mockApi(portfolio);
+    render(<Dashboard />);
+
+    expect((await kpi("Patrimonio total")).getByText(eur(3475.68))).toBeInTheDocument();
+    expect((await kpi("Inversión total")).getByText(eur(3413.33))).toBeInTheDocument();
+    expect((await kpi("Ganancia / Pérdida")).getByText(eurSigned(62.35))).toBeInTheDocument();
+    expect((await kpi("Rentabilidad")).getByText(pctSigned(1.83))).toBeInTheDocument();
+  });
+
+  it("una ganancia se muestra en verde con signo + y una pérdida en rojo con signo −", async () => {
+    mockApi({ ...portfolio, pnl: 62.35, pnlPercentage: 1.83 });
+    const { unmount } = render(<Dashboard />);
+    const gain = (await kpi("Ganancia / Pérdida")).getByText(eurSigned(62.35));
+    expect(gain.textContent).toContain("+");
+    expect(gain.className).toContain("text-emerald");
+    unmount();
+
+    mockApi({ ...portfolio, pnl: -1234.56, pnlPercentage: -3.21 });
+    render(<Dashboard />);
+    const loss = (await kpi("Ganancia / Pérdida")).getByText(eurSigned(-1234.56));
+    expect(loss.textContent).toMatch(/^[-−]/);
+    expect(loss.className).toContain("text-red");
+    expect((await kpi("Rentabilidad")).getByText(pctSigned(-3.21))).toBeInTheDocument();
+  });
+
+  it("formatea importes grandes con separador de miles y coma decimal", async () => {
+    mockApi({ ...portfolio, totalValue: 1234567.89, totalInvested: 1000000, pnl: 234567.89, pnlPercentage: 23.46 });
+    render(<Dashboard />);
+
+    expect((await kpi("Patrimonio total")).getByText(eur(1234567.89))).toBeInTheDocument();
+    expect(eur(1234567.89)).toBe("1.234.567,89 €");
+    expect((await kpi("Inversión total")).getByText("1.000.000,00 €")).toBeInTheDocument();
+  });
+
+  it("con cero ganancia no muestra signo ni color de ganancia o pérdida", async () => {
+    mockApi({ ...portfolio, pnl: 0, pnlPercentage: 0 });
+    render(<Dashboard />);
+
+    const zero = (await kpi("Ganancia / Pérdida")).getByText(eurSigned(0));
+    expect(zero.textContent).not.toMatch(/[+\-−]/);
+    expect(zero.className).not.toContain("text-emerald");
+    expect(zero.className).not.toContain("text-red");
+  });
+
   it("agrupa la distribución por categoría (Renta Variable vs Renta Fija)", async () => {
     mockApi(portfolio);
     render(<Dashboard />);

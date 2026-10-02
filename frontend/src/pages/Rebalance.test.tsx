@@ -151,6 +151,58 @@ describe("Rebalance", () => {
     await waitFor(() => expect(screen.getByLabelText("Nueva Aportación (€)")).toHaveValue(""));
   });
 
+  it("recalcula las sugerencias de la tabla cada vez que cambia la aportación", async () => {
+    mockApi();
+    render(<Rebalance />);
+    const input = await screen.findByLabelText("Nueva Aportación (€)");
+
+    const rowOf = (name: string) => within(within(resultTable()).getByText(name).closest("tr")!);
+    const footer = () => within(resultTable().querySelector("tfoot") as HTMLElement);
+
+    // Sin aportación: cartera 80/20 frente a 70/30, pero no hay dinero que repartir.
+    expect(rowOf("Fondo Bonos").getByText("—")).toBeInTheDocument();
+    expect(rowOf("Fondo Mundial").getByText("—")).toBeInTheDocument();
+    expect(screen.getByText(eur(10000), { selector: "span" })).toBeInTheDocument(); // patrimonio tras aportar
+
+    // 500 € → todo al fondo infraponderado (déficit 1.300 € > 500 €).
+    await userEvent.type(input, "500");
+    expect(rowOf("Fondo Bonos").getByText(`+ ${eur(500)}`)).toBeInTheDocument();
+    expect(rowOf("Fondo Mundial").getByText("—")).toBeInTheDocument();
+    expect(footer().getByText(eur(500))).toBeInTheDocument();
+    expect(screen.getByText(eur(10500), { selector: "span" })).toBeInTheDocument();
+
+    // 3.000 € → ahora ambos están por debajo de su objetivo (9.100 € y 3.900 €).
+    await userEvent.clear(input);
+    await userEvent.type(input, "3000");
+    expect(rowOf("Fondo Mundial").getByText(`+ ${eur(1100)}`)).toBeInTheDocument();
+    expect(rowOf("Fondo Bonos").getByText(`+ ${eur(1900)}`)).toBeInTheDocument();
+    expect(footer().getByText(eur(3000))).toBeInTheDocument();
+
+    // Vaciar el campo vuelve a no sugerir nada.
+    await userEvent.clear(input);
+    expect(within(resultTable()).getAllByText("—")).toHaveLength(2);
+    expect(within(resultTable()).queryByText(/^\+/)).not.toBeInTheDocument();
+  });
+
+  it("recalcula también al cambiar un % objetivo (sin guardar)", async () => {
+    mockApi();
+    render(<Rebalance />);
+    await userEvent.type(await screen.findByLabelText("Nueva Aportación (€)"), "1000");
+
+    // Objetivo 50/50: con 11.000 € A debería tener 5.500 (<8.000) y B 5.500 (+3.500 de déficit).
+    const mundial = screen.getByLabelText("% objetivo de Fondo Mundial");
+    const bonos = screen.getByLabelText("% objetivo de Fondo Bonos");
+    await userEvent.clear(mundial);
+    await userEvent.type(mundial, "50");
+    await userEvent.clear(bonos);
+    await userEvent.type(bonos, "50");
+
+    const row = within(within(resultTable()).getByText("Fondo Bonos").closest("tr")!);
+    expect(row.getByText(pct(50))).toBeInTheDocument();
+    expect(row.getByText(`+ ${eur(1000)}`)).toBeInTheDocument(); // sigue siendo todo para B
+    expect(screen.getByRole("button", { name: /guardar objetivos/i })).toBeEnabled();
+  });
+
   it("rechaza una aportación no válida", async () => {
     mockApi();
     render(<Rebalance />);
