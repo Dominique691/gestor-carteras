@@ -3,17 +3,22 @@ import { prisma } from "../../db.js";
 import { Decimal } from "../../lib/decimal.js";
 import { validationError } from "../../lib/http.js";
 import { buildPortfolio } from "../../services/portfolio.service.js";
+import { marketData } from "../../services/marketData.service.js";
 import { getRebalance, NoTargetsError } from "../../services/rebalance.service.js";
 import { rebalanceQuerySchema, setTargetsSchema } from "./portfolio.schemas.js";
 
 const portfolioRoutes: FastifyPluginAsync = async (app) => {
   app.addHook("onRequest", app.authenticate);
 
-  app.get("/", async (request) => buildPortfolio(request.user.sub));
+  app.get("/", async (request) => {
+    await marketData.refreshIfStale();
+    return buildPortfolio(request.user.sub);
+  });
 
   app.get("/rebalance", async (request, reply) => {
     const parsed = rebalanceQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send(validationError(parsed.error.issues));
+    await marketData.refreshIfStale();
 
     try {
       return await getRebalance(request.user.sub, new Decimal(parsed.data.newContribution));

@@ -37,6 +37,7 @@ Todos los importes se calculan con aritmética decimal exacta (no con coma flota
 | **Frontend** | [React 19](https://react.dev) · [Vite 8](https://vite.dev) · TypeScript · [Tailwind CSS 4](https://tailwindcss.com) · [Shadcn UI](https://ui.shadcn.com) (sobre Radix UI) · React Router 7 · Recharts · Lucide |
 | **Backend** | [Fastify 5](https://fastify.dev) · TypeScript · [Prisma ORM 7](https://www.prisma.io) · Zod 4 (validación) · `@fastify/jwt` + `bcryptjs` (autenticación) |
 | **Base de datos** | [PostgreSQL](https://www.postgresql.org) (probado con la versión 17) |
+| **Datos de mercado** | API pública de [Yahoo Finance](https://finance.yahoo.com) consultada con `fetch` nativo (sin dependencias adicionales) |
 | **Testing** | [Vitest 5](https://vitest.dev) en ambos proyectos · React Testing Library + jsdom en el frontend |
 
 ## 3. Instalación y ejecución
@@ -90,6 +91,9 @@ Copy-Item backend\.env.example backend\.env
 | `DATABASE_URL` | Cadena de conexión a PostgreSQL | `postgresql://postgres:postgres@localhost:5432/gestor_carteras?schema=public` |
 | `JWT_SECRET` | Secreto con el que se firman los tokens. **Mínimo 32 caracteres**; el servidor no arranca si es más corto | *(sin valor útil: cámbialo)* |
 | `JWT_EXPIRES_IN` | Caducidad del token | `7d` |
+| `MARKET_DATA_ENABLED` | Activa la actualización de precios con datos de mercado reales (Yahoo Finance). Con `false` la aplicación funciona sin conexión a internet, con los últimos precios guardados | `true` |
+| `MARKET_DATA_TTL_MINUTES` | Minutos durante los que un precio se considera vigente antes de volver a consultarlo | `15` |
+| `MARKET_DATA_TIMEOUT_MS` | Tiempo máximo de espera por consulta al proveedor, en milisegundos | `3000` |
 
 Genera un `JWT_SECRET` aleatorio con:
 
@@ -112,7 +116,7 @@ npx prisma db seed      # carga el catálogo de fondos y el usuario de demostrac
 
 - `prisma generate` es necesario porque el cliente generado (`backend/src/generated/`) no se versiona.
 - `prisma db push` sincroniza el esquema directamente, sin historial de migraciones. El repositorio incluye además la migración versionada en `backend/prisma/migrations/`; si prefieres usarla, ejecuta en su lugar `npx prisma migrate deploy` (despliegue) o `npx prisma migrate dev` (desarrollo). No mezcles ambos métodos sobre la misma base de datos.
-- `prisma db seed` es **idempotente**: puedes ejecutarlo varias veces sin duplicar fondos. Recrea cada vez la cartera del usuario de demostración.
+- `prisma db seed` es **idempotente**: puedes ejecutarlo varias veces sin duplicar fondos. Recrea cada vez la cartera del usuario de demostración y no pisa los precios ya sincronizados. Si la base de datos viene de una versión anterior con fondos sin cotización, los retira siempre que nadie los use (nunca borra operaciones ni objetivos de un usuario) y avisa de los que conserva.
 
 ### 3.6 Arrancar la aplicación
 
@@ -166,7 +170,7 @@ gestor-carteras/
 ├── backend/                      # API REST (Fastify + Prisma)
 │   ├── prisma/
 │   │   ├── schema.prisma         # Modelo de datos: User, Fund, Transaction, TargetAllocation
-│   │   ├── migrations/           # Migración SQL versionada
+│   │   ├── migrations/           # Migraciones SQL versionadas
 │   │   └── seed.ts               # Catálogo de fondos + usuario y cartera de demostración
 │   ├── prisma.config.ts          # Configuración de Prisma (URL de la BD, comando de seed)
 │   ├── vitest.config.ts
@@ -180,7 +184,7 @@ gestor-carteras/
 │       │   ├── funds/            #   catálogo de fondos
 │       │   ├── transactions/     #   alta y listado de operaciones
 │       │   └── portfolio/        #   cartera, objetivos y cálculo de coste medio
-│       ├── services/             # Lógica de negocio: valoración de cartera y rebalanceo
+│       ├── services/             # Lógica de negocio: valoración de cartera, rebalanceo y datos de mercado
 │       ├── lib/                  # Utilidades: aritmética decimal, formato de errores
 │       ├── routes/__tests__/     # Tests de integración de la autenticación
 │       └── generated/            # Cliente de Prisma generado (no se versiona)
@@ -213,14 +217,28 @@ gestor-carteras/
 
 - **Cuatro indicadores:** patrimonio total, inversión total, ganancia/pérdida en euros y rentabilidad en %. Las ganancias salen en verde y las pérdidas en rojo, con flecha para no depender solo del color.
 - **Gráfico circular** con la distribución de la cartera por categoría (Renta Variable frente a Renta Fija).
-- **Tabla de fondos en cartera:** nombre, ISIN, participaciones, precio actual, valor total, P&L (€ y %) y peso sobre la cartera.
+- **Tabla de fondos en cartera:** nombre, ISIN, participaciones, precio actual (con la fecha y hora de su última actualización), valor total, P&L (€ y %) y peso sobre la cartera.
+- **Botón «Actualizar precios de mercado»:** descarga al momento las cotizaciones reales de los ETF, muestra un indicador de carga y avisa con una notificación del resultado. Ver [Precios de mercado](#precios-de-mercado-reales).
 
 ### Catálogo y transacciones
 
-- **Catálogo de fondos:** `GET /api/funds` devuelve los fondos disponibles (nombre, ISIN, categoría y valor liquidativo actual). El catálogo se carga al abrir el formulario de nueva transacción.
+- **Catálogo de fondos:** `GET /api/funds` devuelve los fondos disponibles (nombre, ISIN, categoría, valor liquidativo actual, ticker y fecha de la última actualización). El catálogo contiene **solo fondos que cotizan en bolsa**: 11 ETF populares (iShares Core MSCI World, Vanguard FTSE All-World, iShares Core S&P 500, Vanguard S&P 500, Xtrackers MSCI World, Amundi MSCI World, iShares Core MSCI EM IMI y 4 de renta fija). La API no lista ni permite comprar fondos sin ticker. El catálogo se carga al abrir el formulario de nueva transacción.
 - **Alta de transacciones** desde el botón **«Añadir transacción»**: compra o venta, fondo, fecha y cantidad, indicada **en participaciones o en euros** (en este caso, las participaciones se calculan como importe ÷ precio). El precio es el valor liquidativo actual del fondo y no es editable.
 - **Validaciones:** no se puede vender más de lo que se posee en esa fecha (incluidas las operaciones con fecha pasada), ni registrar fechas futuras. El saldo se valida bloqueando las escrituras concurrentes del mismo usuario.
 - **Histórico de transacciones:** en la parte inferior del Dashboard, la tarjeta **«Historial de transacciones»** lista todas las operaciones del usuario, de la más reciente a la más antigua: fecha, tipo (compra o venta), fondo con su ISIN, participaciones, precio e importe. Muestra las 10 últimas y un botón **«Ver todas»** despliega el resto. Se actualiza solo al registrar una operación nueva. Los datos vienen de `GET /api/transactions`, y las posiciones y el precio medio se calculan reproduciendo ese historial en orden cronológico.
+
+### Precios de mercado reales
+
+Los valores liquidativos de los ETF se actualizan con cotizaciones reales de **Yahoo Finance** (consulta HTTP directa, sin claves de API ni dependencias extra). Cada ETF del catálogo tiene un *ticker* (por ejemplo, `EUNL.DE`, `VWCE.DE`, `SXR8.DE`).
+
+- **Actualización automática:** al abrir el Dashboard, el catálogo o el rebalanceo, se refrescan solo los precios que llevan más de 15 minutos sin actualizarse (configurable). Si el precio está vigente, no se consulta nada, y la respuesta es inmediata.
+- **Actualización manual:** el botón **«Actualizar precios de mercado»** del Dashboard (o `POST /api/funds/sync-prices`) fuerza la consulta de todo el catálogo.
+- **Resiliente a fallos:** si el proveedor no responde (límite de cuota, sin conexión, más de 3 s de espera o respuesta no válida), el error se captura, **no se modifica la base de datos** y la aplicación sigue mostrando la última cotización guardada, sin errores. Tras un fallo, ese fondo no se reintenta durante 5 minutos para no ralentizar las peticiones.
+- **Fecha visible:** junto al precio de cada fondo (y en la cabecera del Dashboard) se muestra cuándo se actualizó por última vez.
+- **Solo euros:** se descartan las cotizaciones en otra divisa.
+- **Sin conexión:** con `MARKET_DATA_ENABLED=false` la aplicación no consulta internet y trabaja con los precios guardados.
+
+Todos los fondos del catálogo cotizan en bolsa y tienen ticker, por lo que todos sus precios son reales. La arquitectura se detalla en el [apartado 1.6 de la documentación técnica](./DOCUMENTACION_TFM.md#16-integración-de-datos-de-mercado).
 
 ### Módulo de rebalanceo inteligente por aportación
 
@@ -274,7 +292,8 @@ npx vitest run -t "no genera aportaciones negativas"
 | Proyecto | Tipo | Contenido |
 |---|---|---|
 | Backend | Unitarios | Cálculo de coste medio y validación de ventas (`portfolio.calc.test.ts`); algoritmo de rebalanceo: cartera 70/30, aportación de 1.000 €, ausencia de aportaciones negativas (`rebalance.test.ts`) |
-| Backend | Integración | Flujo completo de registro, login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`) |
+| Backend | Unitarios | Servicio de precios de mercado con la API externa simulada: respuesta correcta, errores HTTP/429, sin conexión, timeout, respuestas no válidas, divisa distinta del euro, caché, periodo de espera y **recuperación con la última cotización guardada** (`marketData.test.ts`) |
+| Backend | Integración | Flujo completo de registro, login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`); catálogo y sincronización de precios, con proveedor operativo y caído (`funds.test.ts`); solo se pueden comprar fondos que cotizan (`transactions.test.ts`) |
 | Frontend | Unitarios | Cálculo de rebalanceo en el cliente, reparto en céntimos y *parsing* de importes (`rebalance.test.ts`) |
 | Frontend | Integración | Rutas y sesión (`App.test.tsx`); KPIs, gráfico, tabla de fondos, historial de transacciones y modal de alta (`Dashboard.test.tsx`); recálculo dinámico y ejecución del rebalanceo (`Rebalance.test.tsx`) |
 
@@ -293,7 +312,9 @@ Para comprobar que todo el proyecto está sano antes de entregar: `npm run build
 
 ## 9. Limitaciones conocidas
 
-- **Valores liquidativos estáticos:** los precios de los fondos son ficticios y están guardados en la base de datos; no hay conexión con un proveedor de datos de mercado. Los ISIN son los de fondos reales, pero conviene verificarlos antes de cualquier uso fuera del entorno académico.
+- **Solo fondos cotizados:** el catálogo se limita a 11 ETF con cotización real. Los fondos de inversión tradicionales, que no cotizan en bolsa y se valoran una vez al día, no están soportados.
+- **Proveedor no oficial:** los precios proceden de la API pública de Yahoo Finance, que no tiene contrato de servicio y puede cambiar o limitar el acceso sin previo aviso. Es el precio de cotización en bolsa, que puede diferir ligeramente del valor liquidativo oficial, y puede tener retraso. Si el proveedor falla, la aplicación sigue funcionando con los últimos precios guardados.
+- **ISIN:** son los de fondos reales, pero conviene verificarlos antes de cualquier uso fuera del entorno académico.
 - **Precio de las operaciones:** al registrar una transacción se usa el valor liquidativo *actual*, aunque la fecha sea pasada. Por tanto, el precio medio y el P&L de operaciones históricas son aproximados.
 - **Historial sin filtros:** el historial de transacciones se muestra completo, sin filtros por fondo, tipo o fechas, y no permite editar ni eliminar operaciones ya registradas.
 - **Una sola divisa:** todos los importes se expresan en euros.

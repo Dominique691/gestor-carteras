@@ -1,6 +1,7 @@
 import { LayoutDashboard, LogOut, Scale, TrendingUp } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/sonner";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +47,7 @@ export function AppLayout() {
       <main className="mx-auto max-w-6xl p-4">
         <Outlet />
       </main>
+      <Toaster richColors position="bottom-right" closeButton />
     </div>
   );
 }

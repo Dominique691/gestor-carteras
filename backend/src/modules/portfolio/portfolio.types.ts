@@ -7,6 +7,8 @@ export interface PositionDto {
   /** Precio medio de compra (coste medio) por participación, en €. */
   averageBuyPrice: number;
   currentNAV: number;
+  /** Última actualización del NAV con datos de mercado (ISO 8601), o null si nunca se ha sincronizado. */
+  lastPriceUpdate: string | null;
   /** Valor actual de la posición, en €. */
   currentValue: number;
   /** Coste de adquisición de la posición, en €. */

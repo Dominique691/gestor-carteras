@@ -29,6 +29,7 @@ const toDto = (t: TxWithFund): TransactionDto => ({
 });
 
 class FundNotFoundError extends Error {}
+class FundNotTradedError extends Error {}
 
 const transactionsRoutes: FastifyPluginAsync = async (app) => {
   app.addHook("onRequest", app.authenticate);
@@ -55,6 +56,8 @@ const transactionsRoutes: FastifyPluginAsync = async (app) => {
 
         const fund = await tx.fund.findUnique({ where: { id: body.fundId } });
         if (!fund) throw new FundNotFoundError();
+        // Solo se puede comprar en fondos que cotizan; vender uno heredado sin ticker sigue permitido.
+        if (!fund.ticker && body.type === "BUY") throw new FundNotTradedError();
 
         const created = await tx.transaction.create({
           data: {
@@ -78,6 +81,9 @@ const transactionsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(201).send(toDto(created));
     } catch (err) {
       if (err instanceof FundNotFoundError) return reply.code(404).send({ error: "Fondo no encontrado" });
+      if (err instanceof FundNotTradedError) {
+        return reply.code(422).send({ error: "Este fondo no cotiza en bolsa y no está disponible para nuevas compras" });
+      }
       if (err instanceof InsufficientSharesError) {
         return reply.code(422).send({
           error: "No tienes participaciones suficientes para esta venta",

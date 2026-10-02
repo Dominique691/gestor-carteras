@@ -13,6 +13,17 @@ const dateTime = new Intl.DateTimeFormat("es-ES", { dateStyle: "long", timeStyle
 
 /** Fecha corta (dd/mm/aaaa) en la zona horaria del navegador. */
 export const formatDate = (iso: string) => date.format(new Date(iso));
+const dateTimeShort = new Intl.DateTimeFormat("es-ES", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/** Fecha y hora cortas (dd/mm/aaaa, hh:mm) en la zona horaria del navegador. */
+export const formatDateTimeShort = (iso: string) => dateTimeShort.format(new Date(iso));
 /** Fecha y hora completas, para tooltips. */
 export const formatDateTime = (iso: string) => dateTime.format(new Date(iso));
 

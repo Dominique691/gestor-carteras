@@ -37,6 +37,7 @@ export async function buildPortfolio(userId: string): Promise<PortfolioDto> {
         shares: round(h.shares, 4),
         averageBuyPrice: round(h.cost.div(h.shares), 4),
         currentNAV: round(fund.currentNAV, 4),
+        lastPriceUpdate: fund.lastPriceUpdate?.toISOString() ?? null,
         currentValue: round(value, 2),
         invested: round(h.cost, 2),
         pnl: round(value.minus(h.cost), 2),

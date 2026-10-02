@@ -24,6 +24,11 @@ model Fund {
   category   String
   currentNAV Decimal @db.Decimal(12, 4)
 
+  /// Símbolo de cotización en Yahoo Finance (p. ej. "EUNL.DE"). Nulo si el fondo no cotiza en bolsa.
+  ticker          String?   @unique
+  /// Última vez que `currentNAV` se actualizó con datos de mercado. Nulo si nunca se ha sincronizado.
+  lastPriceUpdate DateTime?
+
   transactions      Transaction[]
   targetAllocations TargetAllocation[]
 }

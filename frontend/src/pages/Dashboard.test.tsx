@@ -2,7 +2,8 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fmt from "@/lib/format";
-import type { Fund, Portfolio, TransactionItem } from "@/lib/types";
+import { Toaster } from "@/components/ui/sonner";
+import type { Fund, Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
 import Dashboard from "./Dashboard";
 
 // Intl usa espacios no separables; Testing Library normaliza el DOM pero no el texto esperado.
@@ -12,9 +13,11 @@ const eurSigned = (n: number) => nbsp(fmt.formatEurSigned(n));
 const pct = (n: number) => nbsp(fmt.formatPercent(n));
 const pctSigned = (n: number) => nbsp(fmt.formatPercentSigned(n));
 
+const UPDATED_AT = "2026-10-02T09:30:00.000Z";
+
 const funds: Fund[] = [
-  { id: "f1", isin: "IE00B03HD191", name: "Vanguard Global Stock", category: "Renta Variable", currentNAV: 512.34 },
-  { id: "f2", isin: "IE00B18GC888", name: "Vanguard Global Bond", category: "Renta Fija", currentNAV: 121.45 },
+  { id: "f1", isin: "IE00B03HD191", name: "Vanguard Global Stock", category: "Renta Variable", currentNAV: 512.34, ticker: "EUNL.DE", lastPriceUpdate: UPDATED_AT },
+  { id: "f2", isin: "IE00B18GC888", name: "Vanguard Global Bond", category: "Renta Fija", currentNAV: 121.45, ticker: null, lastPriceUpdate: null },
 ];
 
 const portfolio: Portfolio = {
@@ -27,17 +30,27 @@ const portfolio: Portfolio = {
   positions: [
     {
       fundId: "f1", isin: "IE00B03HD191", name: "Vanguard Global Stock", category: "Renta Variable",
-      shares: 4, averageBuyPrice: 600, currentNAV: 612.75, currentValue: 2451, invested: 2400,
+      shares: 4, averageBuyPrice: 600, currentNAV: 612.75, lastPriceUpdate: UPDATED_AT, currentValue: 2451, invested: 2400,
       pnl: 51, pnlPercentage: 2.13, portfolioPercentage: 70.52, targetPercentage: null,
     },
     {
       fundId: "f2", isin: "IE00B18GC888", name: "Vanguard Global Bond", category: "Renta Fija",
-      shares: 8.4321, averageBuyPrice: 120, currentNAV: 121.45, currentValue: 1024.68, invested: 1013.33,
+      shares: 8.4321, averageBuyPrice: 120, currentNAV: 121.45, lastPriceUpdate: null, currentValue: 1024.68, invested: 1013.33,
       pnl: -11.35, pnlPercentage: -1.12, portfolioPercentage: 29.48, targetPercentage: null,
     },
   ],
 };
 const empty: Portfolio = { ...portfolio, totalValue: 0, totalInvested: 0, pnl: 0, pnlPercentage: 0, positions: [] };
+
+/** Resumen de POST /api/funds/sync-prices. */
+const summary = (updated = 2, failed = 0): SyncSummary => ({
+  total: updated + failed,
+  updated,
+  failed,
+  skipped: 0,
+  syncedAt: "2026-10-02T10:00:00.000Z",
+  results: [],
+});
 
 const json = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
@@ -47,10 +60,12 @@ function mockApi(
   data: Portfolio,
   onPost?: (body: unknown) => Response | Promise<Response>,
   history: TransactionItem[] = [],
+  onSync?: () => Response | Promise<Response>,
 ) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/portfolio") return json(200, data);
     if (url === "/api/funds") return json(200, funds);
+    if (url === "/api/funds/sync-prices" && init?.method === "POST") return onSync ? onSync() : json(200, summary());
     if (url === "/api/transactions" && init?.method === "POST") {
       return onPost ? onPost(JSON.parse(String(init.body))) : json(201, {});
     }
@@ -181,6 +196,157 @@ const tx = (n: number, over: Partial<TransactionItem> = {}): TransactionItem => 
   total: 1280.85,
   transactionDate: new Date(Date.UTC(2026, 8, 30 - n, 12)).toISOString(),
   ...over,
+});
+
+const renderWithToasts = () =>
+  render(
+    <>
+      <Dashboard />
+      <Toaster />
+    </>,
+  );
+const syncButton = () => screen.findByRole("button", { name: "Actualizar precios de mercado" });
+const syncCalls = (fetchMock: ReturnType<typeof mockApi>) =>
+  fetchMock.mock.calls.filter(([u, init]) => u === "/api/funds/sync-prices" && init?.method === "POST");
+const portfolioCalls = (fetchMock: ReturnType<typeof mockApi>) =>
+  fetchMock.mock.calls.filter(([u]) => u === "/api/portfolio");
+
+describe("Precios de mercado", () => {
+  it("muestra junto al precio de cada fondo cuándo se actualizó por última vez", async () => {
+    mockApi(portfolio);
+    render(<Dashboard />);
+
+    const stock = within((await screen.findByText("Vanguard Global Stock", { selector: "td" })).closest("tr")!);
+    const bond = within((await screen.findByText("Vanguard Global Bond", { selector: "td" })).closest("tr")!);
+    expect(stock.getByText(nbsp(fmt.formatDateTimeShort(UPDATED_AT)))).toBeInTheDocument();
+    expect(bond.getByText("Sin actualizar")).toBeInTheDocument();
+    // Y, arriba, la actualización más reciente de toda la cartera.
+    expect(screen.getByText(/Precios de mercado actualizados el/)).toHaveTextContent(
+      nbsp(fmt.formatDateTimeShort(UPDATED_AT)),
+    );
+  });
+
+  it("indica que los precios están sin actualizar si ningún fondo se ha sincronizado nunca", async () => {
+    mockApi({ ...portfolio, positions: portfolio.positions.map((p) => ({ ...p, lastPriceUpdate: null })) });
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Precios de mercado sin actualizar")).toBeInTheDocument();
+  });
+
+  it("el botón llama al endpoint de sincronización, avisa con una notificación y recarga la cartera", async () => {
+    const fetchMock = mockApi(portfolio, undefined, [], () => json(200, summary(2, 0)));
+    renderWithToasts();
+
+    await userEvent.click(await syncButton());
+
+    expect(await screen.findByText("Precios actualizados: 2 fondos")).toBeInTheDocument();
+    expect(syncCalls(fetchMock)).toHaveLength(1);
+    expect(portfolioCalls(fetchMock)).toHaveLength(2); // carga inicial + recarga tras sincronizar
+  });
+
+  it("mientras sincroniza muestra un spinner y deshabilita el botón", async () => {
+    let finish!: (r: Response) => void;
+    const fetchMock = mockApi(portfolio, undefined, [], () => new Promise<Response>((res) => (finish = res)));
+    renderWithToasts();
+
+    const button = await syncButton();
+    await userEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(button.querySelector("svg")).toHaveClass("animate-spin");
+    await userEvent.click(button); // un segundo clic no lanza otra sincronización
+    expect(syncCalls(fetchMock)).toHaveLength(1);
+
+    finish(new Response(JSON.stringify(summary(1, 0)), { status: 200 }));
+    expect(await screen.findByText("Precios actualizados: 1 fondo")).toBeInTheDocument();
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(button.querySelector("svg")).not.toHaveClass("animate-spin");
+  });
+
+  it("si solo responden algunos fondos, avisa de los que se quedan con su último precio", async () => {
+    mockApi(portfolio, undefined, [], () => json(200, summary(1, 1)));
+    renderWithToasts();
+
+    await userEvent.click(await syncButton());
+
+    expect(
+      await screen.findByText("1 fondo actualizado; 1 sin respuesta del proveedor (se mantiene su último precio)"),
+    ).toBeInTheDocument();
+  });
+
+  it("si el proveedor no responde para ninguno, avisa de que se mantienen los últimos precios", async () => {
+    mockApi(portfolio, undefined, [], () => json(200, summary(0, 2)));
+    renderWithToasts();
+
+    await userEvent.click(await syncButton());
+
+    expect(
+      await screen.findByText("No se pudieron obtener los precios de mercado. Se mantienen los últimos guardados."),
+    ).toBeInTheDocument();
+  });
+
+  it("muestra el mensaje del backend si la sincronización no está disponible", async () => {
+    mockApi(portfolio, undefined, [], () =>
+      json(503, { error: "La sincronización de precios de mercado está desactivada" }),
+    );
+    renderWithToasts();
+
+    await userEvent.click(await syncButton());
+
+    expect(await screen.findByText("La sincronización de precios de mercado está desactivada")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Actualizar precios de mercado" })).toBeEnabled());
+  });
+
+  it("tras sincronizar muestra la nueva fecha de actualización", async () => {
+    const NEW_DATE = "2026-10-02T11:45:00.000Z";
+    let synced = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/funds/sync-prices") {
+          synced = true;
+          return json(200, summary(2, 0));
+        }
+        if (url === "/api/portfolio") {
+          return json(200, {
+            ...portfolio,
+            positions: portfolio.positions.map((p) => (synced ? { ...p, lastPriceUpdate: NEW_DATE } : p)),
+          });
+        }
+        if (url === "/api/transactions" && !init?.method) return json(200, []);
+        return json(404, { error: "no encontrado" });
+      }),
+    );
+    renderWithToasts();
+    expect(await screen.findByText(/Precios de mercado actualizados el/)).toHaveTextContent(
+      nbsp(fmt.formatDateTimeShort(UPDATED_AT)),
+    );
+
+    await userEvent.click(await syncButton());
+
+    await waitFor(() =>
+      expect(screen.getByText(/Precios de mercado actualizados el/)).toHaveTextContent(
+        nbsp(fmt.formatDateTimeShort(NEW_DATE)),
+      ),
+    );
+  });
+
+  it("el formulario de transacción indica la fecha del precio del fondo elegido", async () => {
+    mockApi(portfolio);
+    render(<Dashboard />);
+    await userEvent.click(await screen.findByRole("button", { name: /añadir transacción/i }));
+    const dialog = within(await screen.findByRole("dialog"));
+
+    await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
+    expect(dialog.getByText(/Precio de mercado actualizado el/)).toHaveTextContent(
+      nbsp(fmt.formatDateTimeShort(UPDATED_AT)),
+    );
+
+    await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Bond" }));
+    expect(dialog.getByText("Precio sin actualizar con datos de mercado")).toBeInTheDocument();
+  });
 });
 
 describe("Historial de transacciones", () => {

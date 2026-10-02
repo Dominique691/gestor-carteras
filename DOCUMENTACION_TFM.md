@@ -22,6 +22,8 @@ El sistema sigue una arquitectura **cliente-servidor de tres capas**, con una se
 2. **Capa de aplicación.** Un servidor Node.js basado en Fastify que expone una API REST sin estado. Valida los datos de entrada, autentica a los usuarios mediante tokens JWT, aplica las reglas de negocio y accede a la base de datos a través del ORM Prisma.
 3. **Capa de persistencia.** Una base de datos relacional PostgreSQL que garantiza la integridad de los datos mediante claves, restricciones de unicidad y tipos numéricos de precisión exacta.
 
+Además, el servidor consulta un **proveedor externo de cotizaciones** (la API pública de Yahoo Finance) para mantener actualizados los valores liquidativos de los ETF del catálogo. Esta dependencia externa está aislada en un servicio propio con una estrategia de caché y recuperación ante fallos (sección 1.6), de modo que su indisponibilidad nunca afecta al funcionamiento de la aplicación.
+
 El código fuente se organiza como un **monorepo** con dos proyectos independientes (`backend/` y `frontend/`) que comparten únicamente el contrato de la API, definido en la sección 3.
 
 ### 1.2 Diagrama de arquitectura
@@ -39,14 +41,18 @@ flowchart LR
         JWT["Plugin de autenticación<br/>verificación del JWT"]
         MOD["Módulos de dominio<br/>auth · funds · transactions · portfolio"]
         SVC["Servicios de negocio<br/>valoración de cartera · rebalanceo"]
+        MD["Servicio de datos de mercado<br/>caché TTL · timeout · fallback"]
         ORM["Prisma ORM"]
         API --> JWT --> MOD --> SVC --> ORM
+        MOD --> MD --> ORM
     end
 
     DB[("PostgreSQL<br/>User · Fund · Transaction · TargetAllocation")]
+    YF["Yahoo Finance<br/>API pública de cotizaciones"]
 
     SPA -- "HTTP/JSON<br/>Authorization: Bearer JWT" --> API
     ORM -- "SQL" --> DB
+    MD -. "HTTPS · timeout 3 s" .-> YF
 ```
 
 ### 1.3 Responsabilidades por componente
@@ -59,6 +65,7 @@ flowchart LR
 | **Validación** | Zod 4 | Validación y normalización de todas las entradas antes de llegar a la lógica de negocio. |
 | **Autenticación** | `@fastify/jwt`, `bcryptjs` | Emisión y verificación de JWT; cifrado de contraseñas. |
 | **Servicios** | TypeScript | Reglas de negocio: coste medio, valoración de la cartera y cálculo de rebalanceo. |
+| **Datos de mercado** | `fetch` nativo, API de Yahoo Finance | Descarga de cotizaciones, actualización del valor liquidativo (`currentNAV`) y de la fecha de actualización de cada fondo, con caché y recuperación ante fallos. |
 | **Acceso a datos** | Prisma 7 | Modelo tipado, consultas, transacciones de base de datos y migraciones. |
 | **Base de datos** | PostgreSQL 17 | Almacenamiento persistente con integridad referencial. |
 
@@ -94,6 +101,58 @@ sequenceDiagram
 - **Cálculo del rebalanceo en dos lugares.** El servidor expone el cálculo por API (fuente de verdad documentada en esta memoria) y el cliente incorpora una implementación equivalente para ofrecer una vista previa inmediata mientras el usuario edita objetivos sin guardar. Ambas implementaciones están cubiertas por pruebas.
 - **Pruebas.** Se emplea Vitest en ambos proyectos. El backend se prueba con una base de datos simulada en memoria y el frontend con React Testing Library, simulando las respuestas de la API; ninguna prueba requiere servicios externos.
 
+### 1.6 Integración de datos de mercado
+
+El valor liquidativo (`currentNAV`) de los ETF con cotización en bolsa se mantiene actualizado consultando la API pública de gráficos de **Yahoo Finance** (`/v8/finance/chart/{ticker}`) mediante peticiones HTTPS directas, sin dependencias adicionales. Cada fondo del catálogo lleva un **ticker** (por ejemplo, `EUNL.DE` para el iShares Core MSCI World en la bolsa de Fráncfort), y **el catálogo solo ofrece fondos que cotizan**: la API no lista los registros sin ticker y rechaza registrar compras sobre ellos. Esto garantiza que el valor de toda la cartera nueva procede de cotizaciones reales y no de datos introducidos a mano.
+
+Al tratarse de un servicio de terceros, no oficial, sin garantías de disponibilidad ni de cuota, la integración se diseñó para que **ningún fallo del proveedor pueda afectar a la aplicación**. El diagrama siguiente resume el comportamiento:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as SPA
+    participant A as API (Fastify)
+    participant M as Servicio de datos de mercado
+    participant Y as Yahoo Finance
+    participant D as PostgreSQL
+
+    S->>A: GET /api/funds (o /api/portfolio)
+    A->>M: refreshIfStale()
+    M->>D: Lee los fondos y la fecha de su último precio
+    alt Precio vigente, o fondo en periodo de espera
+        M-->>A: No se consulta el proveedor
+    else Precio caducado
+        M->>Y: GET /v8/finance/chart/{ticker} · timeout de 3 s
+        alt Respuesta válida, en euros
+            Y-->>M: Precio actual
+            M->>D: UPDATE currentNAV y lastPriceUpdate
+        else Error de red, timeout, cuota superada o respuesta no válida
+            Y--xM: Fallo
+            M->>M: Captura el error y aplica el periodo de espera
+            Note over M,D: La base de datos no se modifica
+        end
+    end
+    A->>D: Lee fondos o cartera (última cotización guardada)
+    A-->>S: 200 OK
+```
+
+**Estrategia de caché y recuperación:**
+
+| Mecanismo | Descripción | Valor por defecto |
+|---|---|---|
+| **Caché con vigencia (TTL)** | Un precio se considera vigente durante un tiempo desde su última actualización (`lastPriceUpdate`); mientras tanto no se consulta al proveedor, aunque se pida el catálogo continuamente. Al guardarse en la base de datos, la caché sobrevive a los reinicios del servidor. | 15 minutos |
+| **Timeout** | Cada consulta se cancela si el proveedor no responde a tiempo. | 3 segundos |
+| **Recuperación (*fallback*)** | Cualquier fallo (red, timeout, cuota, respuesta no válida, error de escritura) se captura sin propagarse; la base de datos no se modifica y las consultas siguen devolviendo la última cotización guardada. | Siempre activa |
+| **Periodo de espera tras fallo** | Un fondo cuya consulta falló no se reintenta durante un tiempo, para no añadir latencia a cada petición cuando el proveedor está caído. La actualización manual lo ignora. | 5 minutos |
+| **Paralelismo acotado** | Las consultas de un mismo ciclo se lanzan en paralelo, por lo que el retraso máximo de una petición es el del timeout, no la suma de todos los fondos. | 12 simultáneas |
+| **Una sola ronda** | Las peticiones simultáneas comparten la misma ronda de consultas en lugar de duplicarlas. | — |
+
+**Validación de la respuesta.** Solo se acepta un precio numérico, finito y mayor que cero, expresado en **euros**: una cotización en otra divisa produciría un valor liquidativo erróneo, por lo que se descarta. El precio se redondea a 4 decimales, la precisión del campo `NUMERIC(12,4)`.
+
+**Puntos de activación.** El refresco automático (solo de los precios caducados) se ejecuta al solicitar el catálogo (`GET /api/funds`), la cartera (`GET /api/portfolio`) y el rebalanceo (`GET /api/portfolio/rebalance`). Además, el endpoint `POST /api/funds/sync-prices` fuerza la actualización de todo el catálogo, ignorando la vigencia y el periodo de espera. Como el catálogo es común a todos los usuarios, los precios se comparten entre ellos.
+
+**Configuración.** Mediante variables de entorno: `MARKET_DATA_ENABLED` (activa o desactiva la integración), `MARKET_DATA_TTL_MINUTES` y `MARKET_DATA_TIMEOUT_MS`.
+
 ---
 
 ## 2. Esquema de base de datos
@@ -120,6 +179,8 @@ erDiagram
         string name
         string category "Renta Variable o Renta Fija"
         decimal currentNAV "NUMERIC(12,4)"
+        string ticker UK "símbolo en Yahoo Finance"
+        datetime lastPriceUpdate "opcional, última sincronización de mercado"
     }
 
     Transaction {
@@ -158,7 +219,9 @@ erDiagram
 | `isin` | Texto | Único | Código ISIN internacional del fondo. |
 | `name` | Texto | — | Denominación del fondo. |
 | `category` | Texto | — | Categoría de activo (por ejemplo, *Renta Variable*, *Renta Fija*). |
-| `currentNAV` | `NUMERIC(12,4)` | — | Valor liquidativo (*Net Asset Value*) actual por participación, en euros. |
+| `currentNAV` | `NUMERIC(12,4)` | — | Valor liquidativo (*Net Asset Value*) actual por participación, en euros. En los fondos con ticker se actualiza con datos de mercado (sección 1.6). |
+| `ticker` | Texto | Único; admite nulo | Símbolo de cotización en Yahoo Finance (por ejemplo, `EUNL.DE`). Todos los fondos del catálogo lo tienen; el campo admite nulo únicamente para no invalidar registros heredados de versiones anteriores, que la API no muestra ni permite comprar. |
+| `lastPriceUpdate` | Fecha y hora | Opcional | Última vez que `currentNAV` se actualizó con datos de mercado. Nulo si nunca se ha sincronizado. |
 
 **`Transaction`**: operación de compra o venta de participaciones.
 
@@ -236,7 +299,8 @@ erDiagram
 | `POST` | `/api/auth/register` | No | Alta de usuario. |
 | `POST` | `/api/auth/login` | No | Inicio de sesión. |
 | `GET` | `/api/auth/me` | Sí | Datos del usuario autenticado. |
-| `GET` | `/api/funds` | Sí | Catálogo de fondos. |
+| `GET` | `/api/funds` | Sí | Catálogo de fondos (refresca los precios caducados). |
+| `POST` | `/api/funds/sync-prices` | Sí | Fuerza la actualización de los precios de mercado de todo el catálogo. |
 | `GET` | `/api/transactions` | Sí | Historial de operaciones del usuario. |
 | `POST` | `/api/transactions` | Sí | Registro de una compra o venta. |
 | `GET` | `/api/portfolio` | Sí | Resumen valorado de la cartera. |
@@ -327,19 +391,87 @@ erDiagram
 #### `GET /api/funds`: catálogo de fondos
 
 - **Cabeceras:** `Authorization: Bearer <JWT>`.
+- **Comportamiento:** antes de responder, refresca los precios de mercado que hayan caducado (sección 1.6). Si el proveedor externo falla, **no devuelve error**: responde con la última cotización guardada en la base de datos.
 - **Respuesta `200 OK`:** lista ordenada por categoría y nombre.
 
 ```json
 [
   {
-    "id": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
-    "isin": "IE00B03HD191",
-    "name": "Vanguard Global Stock Index Fund EUR Acc",
+    "id": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
+    "isin": "IE00B4L5Y983",
+    "name": "iShares Core MSCI World UCITS ETF USD Acc",
     "category": "Renta Variable",
-    "currentNAV": 512.34
+    "currentNAV": 130.47,
+    "ticker": "EUNL.DE",
+    "lastPriceUpdate": "2026-10-02T13:18:15.826Z"
+  },
+  {
+    "id": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
+    "isin": "IE00BK5BQT80",
+    "name": "Vanguard FTSE All-World UCITS ETF USD Acc",
+    "category": "Renta Variable",
+    "currentNAV": 171.72,
+    "ticker": "VWCE.DE",
+    "lastPriceUpdate": "2026-10-02T13:18:15.826Z"
   }
 ]
 ```
+
+| Campo | Significado |
+|---|---|
+| `ticker` | Símbolo en Yahoo Finance. El catálogo solo incluye fondos con ticker, por lo que no es nulo en esta respuesta. |
+| `lastPriceUpdate` | Momento (UTC) de la última actualización del precio con datos de mercado, o `null` si todavía no se ha sincronizado (por ejemplo, justo después de cargar el *seed*). |
+
+#### `POST /api/funds/sync-prices`: actualización manual de precios
+
+Fuerza la consulta al proveedor de datos de mercado de **todos** los fondos con ticker, ignorando la vigencia de la caché y el periodo de espera por fallos. El catálogo es común a todos los usuarios, por lo que la actualización afecta a todos.
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`. No requiere cuerpo; si el cliente envía uno (con cualquier `Content-Type`), se ignora.
+- **Respuesta `200 OK`:** resumen de la sincronización, con el detalle por fondo. Se responde `200` aunque algunos o todos los fondos fallen: el fallo del proveedor es información del resultado, no un error de la petición.
+
+```json
+{
+  "total": 11,
+  "updated": 11,
+  "failed": 0,
+  "skipped": 0,
+  "syncedAt": "2026-10-02T13:19:23.588Z",
+  "results": [
+    {
+      "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
+      "isin": "IE00B4L5Y983",
+      "ticker": "EUNL.DE",
+      "status": "updated",
+      "price": 130.5
+    },
+    {
+      "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
+      "isin": "IE00BK5BQT80",
+      "ticker": "VWCE.DE",
+      "status": "updated",
+      "price": 171.72
+    }
+  ]
+}
+```
+
+| Campo | Significado |
+|---|---|
+| `total` | Fondos considerados. |
+| `updated`, `failed`, `skipped` | Fondos actualizados, con error y omitidos (por no tener ticker, tener un precio vigente o estar en periodo de espera). |
+| `results[].status` | `updated`, `failed` o `skipped`. |
+| `results[].price` | Nuevo valor liquidativo (solo si `updated`). |
+| `results[].reason` | Si `failed`: `http` (el proveedor respondió con error, por ejemplo 429), `timeout`, `network`, `invalid` (respuesta sin un precio válido), `currency` (divisa distinta del euro) o `database`. Si `skipped`: `no-ticker`, `fresh` o `cooldown` (estos dos últimos solo en el refresco automático). |
+| `results[].detail` | Descripción del fallo, si lo hubo. |
+
+Cuando hay fallos, la base de datos conserva la última cotización de esos fondos. Ejemplo con el proveedor inaccesible: `{ "total": 11, "updated": 0, "failed": 11, "skipped": 0, … }`, con `status: "failed"` y `reason: "timeout"` en los fondos afectados.
+
+- **Errores:**
+
+| Código | Causa |
+|---|---|
+| `401` | Token ausente o inválido. |
+| `503` | `{ "error": "La sincronización de precios de mercado está desactivada" }`: la integración está desactivada por configuración (`MARKET_DATA_ENABLED=false`). |
 
 #### `GET /api/transactions`: historial del usuario
 
@@ -427,6 +559,7 @@ erDiagram
       "shares": 4,
       "averageBuyPrice": 600,
       "currentNAV": 612.75,
+      "lastPriceUpdate": "2026-10-02T13:18:15.826Z",
       "currentValue": 2451,
       "invested": 2400,
       "pnl": 51,
@@ -454,6 +587,7 @@ erDiagram
 | `pnl`, `pnlPercentage` | Ganancia o pérdida **latente**: `totalValue − totalInvested` y su porcentaje sobre `totalInvested`. |
 | `realizedPnl` | Ganancia o pérdida **ya realizada** mediante ventas. |
 | `positions[].averageBuyPrice` | Coste medio por participación. |
+| `positions[].lastPriceUpdate` | Momento de la última actualización del precio del fondo con datos de mercado, o `null` si nunca se sincronizó. |
 | `positions[].portfolioPercentage` | Peso de la posición sobre `totalValue`. |
 | `positions[].targetPercentage` | Objetivo del fondo, o `null` si no tiene. |
 | `targets` | Objetivos definidos, incluidos los de fondos sin posición (con `currentPercentage` igual a 0). |
@@ -700,36 +834,37 @@ El resultado realizado total es la suma de los `R` de todos los fondos.
 
 ### 4.7 Ejemplo numérico
 
-Se emplea la cartera de demostración que carga el *seed*. Los valores liquidativos actuales son ficticios.
+Se emplea la cartera de demostración que carga el *seed* (cinco ETF), valorada con los **valores liquidativos iniciales** del propio *seed*, que son cotizaciones reales de referencia. Con la sincronización de datos de mercado activa (sección 1.6), los precios varían a diario y, con ellos, las cifras concretas de la cartera; el procedimiento de cálculo es el mismo.
 
 | Fondo | Participaciones `qᵢ` | NAV `Pᵢ` | Valor `Vᵢ` | `wᵢ` (%) | Objetivo `tᵢ` (%) | Desviación `dᵢ` (pp) |
 |---|---:|---:|---:|---:|---:|---:|
-| Vanguard Global Stock | 15 | 512,34 | 7.685,10 | 41,26 | 40 | +1,26 |
-| iShares Core S&P 500 | 8 | 612,75 | 4.902,00 | 26,32 | 20 | +6,32 |
-| Vanguard Global Bond | 25 | 121,45 | 3.036,25 | 16,30 | 20 | −3,70 |
-| Vanguard Emerging Markets | 40 | 38,25 | 1.530,00 | 8,21 | 10 | −1,79 |
-| iShares Euro Government Bond | 12 | 122,88 | 1.474,56 | 7,92 | 10 | −2,08 |
-| **Total** | | | **`V` = 18.627,91** | 100 | 100 | 0 |
+| iShares Core MSCI World | 60 | 130,38 | 7.822,80 | 40,04 | 40 | +0,04 |
+| iShares Core S&P 500 | 8 | 741,58 | 5.932,64 | 30,37 | 20 | +10,37 |
+| Vanguard Global Aggregate Bond | 130 | 23,081 | 3.000,53 | 15,36 | 20 | −4,64 |
+| iShares Core MSCI EM IMI | 31 | 49,255 | 1.526,91 | 7,82 | 10 | −2,18 |
+| iShares Core Euro Government Bond | 12 | 104,415 | 1.252,98 | 6,41 | 10 | −3,59 |
+| **Total** | | | **`V` = 19.535,86** | 100 | 100 | 0 |
 
-**Aportación `C` = 1.000 €.** El patrimonio objetivo es `V′ = 18.627,91 + 1.000 = 19.627,91 €`.
+**Aportación `C` = 1.000 €.** El patrimonio objetivo es `V′ = 19.535,86 + 1.000 = 20.535,86 €`.
 
 | Fondo | Valor deseado `Tᵢ` | `Tᵢ − Vᵢ` | Déficit `Dᵢ` | Aportación `Aᵢ` | `wᵢ′` (%) |
 |---|---:|---:|---:|---:|---:|
-| Vanguard Global Bond | 3.925,58 | +889,33 | 889,33 | **449,97** | 17,76 |
-| iShares Euro Government Bond | 1.962,79 | +488,23 | 488,23 | **247,03** | 8,77 |
-| Vanguard Emerging Markets | 1.962,79 | +432,79 | 432,79 | **218,98** | 8,91 |
-| Vanguard Global Stock | 7.851,16 | +166,06 | 166,06 | **84,02** | 39,58 |
-| iShares Core S&P 500 | 3.925,58 | −976,42 | 0 | **0,00** | 24,97 |
-| **Total** | 19.627,91 | `C` = 1.000 | `ΣD` = 1.976,42 | **1.000,00** | |
+| Vanguard Global Aggregate Bond | 4.107,17 | +1.106,64 | 1.106,64 | **391,67** | 16,52 |
+| iShares Core Euro Government Bond | 2.053,59 | +800,61 | 800,61 | **283,35** | 7,48 |
+| iShares Core MSCI EM IMI | 2.053,59 | +526,68 | 526,68 | **186,40** | 8,34 |
+| iShares Core MSCI World | 8.214,34 | +391,54 | 391,54 | **138,58** | 38,77 |
+| iShares Core S&P 500 | 4.107,17 | −1.825,47 | 0 | **0,00** | 28,89 |
+| **Total** | 20.535,86 | `C` = 1.000 | `ΣD` = 2.825,47 | **1.000,00** | |
 
 *Los importes se muestran redondeados a dos decimales; por eso la suma de las columnas puede diferir en un céntimo del total indicado.*
 
 Observaciones:
 
-- El fondo **iShares Core S&P 500** está sobreponderado (`E` = 976,42 €) y no recibe nada: no se vende, pero su peso baja del 26,32 % al 24,97 % por dilución.
-- El déficit total (1.976,42 €) es igual a `C + E` = 1.000 + 976,42, como predice la sección 4.4. Por eso se escala por `C / ΣD` = 1.000 / 1.976,42 ≈ 0,506.
-- Ningún fondo receptor supera su objetivo tras la compra (propiedad 4): por ejemplo, Global Stock queda en el 39,58 % frente a un objetivo del 40 %.
-- La mayor desviación absoluta de la cartera pasa de 6,32 a 4,97 puntos porcentuales, y con aportaciones sucesivas continúa reduciéndose.
+- El fondo **iShares Core S&P 500** está sobreponderado (`E` = 1.825,47 €) y no recibe nada: no se vende, pero su peso baja del 30,37 % al 28,89 % por dilución.
+- El déficit total (2.825,47 €) es igual a `C + E` = 1.000 + 1.825,47, como predice la sección 4.4. Por eso se escala por `C / ΣD` = 1.000 / 2.825,47 ≈ 0,354.
+- El fondo **iShares Core MSCI World** está prácticamente en su objetivo (`d` = +0,04 pp) y aun así recibe 138,58 €: al crecer el patrimonio hasta `V′`, su valor deseado (8.214,34 €) supera el actual, de modo que mantiene su peso del 40 % en lugar de diluirse.
+- Ningún fondo receptor supera su objetivo tras la compra (propiedad 4): por ejemplo, MSCI World queda en el 38,77 % frente a un objetivo del 40 %.
+- La mayor desviación absoluta de la cartera pasa de 10,37 a 8,89 puntos porcentuales (el fondo sobreponderado), y con aportaciones sucesivas continúa reduciéndose.
 
 ### 4.8 Detalles de implementación
 
@@ -742,7 +877,7 @@ Observaciones:
 
 ## 5. Limitaciones y trabajo futuro
 
-- **Datos de mercado.** Los valores liquidativos son estáticos y ficticios. Una evolución natural es integrar un proveedor de datos para actualizarlos automáticamente.
+- **Datos de mercado.** El catálogo se limita a ETF con cotización en bolsa, únicos para los que existe un precio en tiempo real accesible. La API pública de Yahoo Finance no es oficial: puede cambiar o limitar el acceso sin previo aviso (de ahí la estrategia de recuperación de la sección 1.6) y devuelve el precio de cotización en bolsa, que puede diferir ligeramente del valor liquidativo oficial. Los fondos de inversión tradicionales, que se valoran una vez al día fuera de bolsa, quedan fuera del alcance. Una evolución natural es emplear un proveedor con contrato de servicio que permita ampliar la cobertura.
 - **Precio de las operaciones.** El formulario registra las operaciones al valor liquidativo actual. Permitir indicar el precio real permitiría una valoración histórica precisa del coste medio.
 - **Rebalanceo con ventas.** El algoritmo se limita deliberadamente al rebalanceo por aportación. Un modo alternativo podría proponer ventas cuando la desviación supere un umbral, teniendo en cuenta su coste fiscal.
 - **Historial de transacciones.** El Dashboard muestra el historial completo, pero sin filtros por fondo, tipo o fechas, y las operaciones registradas no pueden editarse ni anularse. Una mejora natural es añadir filtros, paginación en servidor y la corrección de operaciones erróneas.

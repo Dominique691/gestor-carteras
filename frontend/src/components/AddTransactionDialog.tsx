@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api";
-import { formatDecimal, formatEur, formatPrice, formatShares } from "@/lib/format";
+import { formatDateTimeShort, formatDecimal, formatEur, formatPrice, formatShares } from "@/lib/format";
 import type { CreateTransactionBody, Fund, TransactionType } from "@/lib/types";
 
 const todayISO = () => {
@@ -232,6 +232,13 @@ export function AddTransactionDialog({ onCreated }: Props) {
               />
             </div>
           </div>
+          {selectedFund && (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              {selectedFund.lastPriceUpdate
+                ? `Precio de mercado actualizado el ${formatDateTimeShort(selectedFund.lastPriceUpdate)}`
+                : "Precio sin actualizar con datos de mercado"}
+            </p>
+          )}
 
           <div className="min-w-0 space-y-1.5">
             <label htmlFor="tx-date" className="text-sm font-medium">

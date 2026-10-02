@@ -1,13 +1,17 @@
-import { ArrowDownRight, ArrowUpRight, Loader2, Minus } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Loader2, Minus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { toast } from "sonner";
 import { AddTransactionDialog } from "@/components/AddTransactionDialog";
 import { TransactionHistory } from "@/components/TransactionHistory";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import {
+  formatDateTime,
+  formatDateTimeShort,
   formatEur,
   formatEurSigned,
   formatPercent,
@@ -15,7 +19,7 @@ import {
   formatPrice,
   formatShares,
 } from "@/lib/format";
-import type { Portfolio, TransactionItem } from "@/lib/types";
+import type { Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444"];
@@ -80,6 +84,38 @@ export default function Dashboard() {
     load();
   }, [load]);
 
+  const [syncing, setSyncing] = useState(false);
+
+  // Fuerza la descarga de precios de mercado y avisa del resultado con una notificación.
+  async function syncPrices() {
+    setSyncing(true);
+    try {
+      const s = await api<SyncSummary>("/api/funds/sync-prices", { method: "POST" });
+      if (s.updated > 0 && s.failed === 0) {
+        toast.success(`Precios actualizados: ${s.updated} ${s.updated === 1 ? "fondo" : "fondos"}`);
+      } else if (s.updated > 0) {
+        toast.warning(
+          `${s.updated} ${s.updated === 1 ? "fondo actualizado" : "fondos actualizados"}; ${s.failed} sin respuesta del proveedor (se mantiene su último precio)`,
+        );
+      } else if (s.failed > 0) {
+        toast.error("No se pudieron obtener los precios de mercado. Se mantienen los últimos guardados.");
+      } else {
+        toast.info("No hay fondos con cotización en bolsa que actualizar.");
+      }
+      await load();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "No se pudo conectar con el servidor");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // Momento de la actualización de precios más reciente entre los fondos en cartera.
+  const lastPriceUpdate = useMemo(() => {
+    const times = (portfolio?.positions ?? []).flatMap((p) => (p.lastPriceUpdate ? [p.lastPriceUpdate] : []));
+    return times.length > 0 ? times.reduce((a, b) => (a > b ? a : b)) : null;
+  }, [portfolio]);
+
   const byCategory = useMemo(() => {
     const totals = new Map<string, number>();
     for (const p of portfolio?.positions ?? []) {
@@ -97,8 +133,26 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">Resumen de tu cartera</p>
+          {portfolio && portfolio.positions.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {lastPriceUpdate ? (
+                <>
+                  Precios de mercado actualizados el{" "}
+                  <time dateTime={lastPriceUpdate}>{formatDateTimeShort(lastPriceUpdate)}</time>
+                </>
+              ) : (
+                "Precios de mercado sin actualizar"
+              )}
+            </p>
+          )}
         </div>
-        <AddTransactionDialog onCreated={load} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={syncPrices} disabled={syncing}>
+            <RefreshCw className={cn(syncing && "animate-spin")} />
+            Actualizar precios de mercado
+          </Button>
+          <AddTransactionDialog onCreated={load} />
+        </div>
       </div>
 
       {error && (
@@ -211,7 +265,18 @@ export default function Dashboard() {
                           </TableCell>
                           <TableCell className="font-mono text-xs">{p.isin}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatShares(p.shares)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{formatPrice(p.currentNAV)}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatPrice(p.currentNAV)}
+                            <div className="whitespace-nowrap text-xs text-muted-foreground">
+                              {p.lastPriceUpdate ? (
+                                <time dateTime={p.lastPriceUpdate} title={formatDateTime(p.lastPriceUpdate)}>
+                                  {formatDateTimeShort(p.lastPriceUpdate)}
+                                </time>
+                              ) : (
+                                "Sin actualizar"
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">{formatEur(p.currentValue)}</TableCell>
                           <TableCell className="text-right tabular-nums">
                             <PnlText value={p.pnl} className="justify-end">

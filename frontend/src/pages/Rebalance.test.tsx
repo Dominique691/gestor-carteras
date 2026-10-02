@@ -10,9 +10,9 @@ const eur = (n: number) => nbsp(fmt.formatEur(n));
 const pct = (n: number) => nbsp(fmt.formatPercent(n));
 
 const funds: Fund[] = [
-  { id: "A", isin: "ISIN-A", name: "Fondo Mundial", category: "Renta Variable", currentNAV: 100 },
-  { id: "B", isin: "ISIN-B", name: "Fondo Bonos", category: "Renta Fija", currentNAV: 50 },
-  { id: "C", isin: "ISIN-C", name: "Fondo Emergentes", category: "Renta Variable", currentNAV: 20 },
+  { id: "A", isin: "ISIN-A", name: "Fondo Mundial", category: "Renta Variable", currentNAV: 100, ticker: null, lastPriceUpdate: null },
+  { id: "B", isin: "ISIN-B", name: "Fondo Bonos", category: "Renta Fija", currentNAV: 50, ticker: null, lastPriceUpdate: null },
+  { id: "C", isin: "ISIN-C", name: "Fondo Emergentes", category: "Renta Variable", currentNAV: 20, ticker: null, lastPriceUpdate: null },
 ];
 
 // A pesa 80 % y B 20 % (10.000 €), frente a un objetivo guardado de 70/30.
@@ -23,8 +23,8 @@ const portfolio: Portfolio = {
   pnlPercentage: 11.11,
   realizedPnl: 0,
   positions: [
-    { fundId: "A", isin: "ISIN-A", name: "Fondo Mundial", category: "Renta Variable", shares: 80, averageBuyPrice: 90, currentNAV: 100, currentValue: 8000, invested: 7200, pnl: 800, pnlPercentage: 11.11, portfolioPercentage: 80, targetPercentage: 70 },
-    { fundId: "B", isin: "ISIN-B", name: "Fondo Bonos", category: "Renta Fija", shares: 40, averageBuyPrice: 45, currentNAV: 50, currentValue: 2000, invested: 1800, pnl: 200, pnlPercentage: 11.11, portfolioPercentage: 20, targetPercentage: 30 },
+    { fundId: "A", isin: "ISIN-A", name: "Fondo Mundial", category: "Renta Variable", shares: 80, averageBuyPrice: 90, currentNAV: 100, lastPriceUpdate: null, currentValue: 8000, invested: 7200, pnl: 800, pnlPercentage: 11.11, portfolioPercentage: 80, targetPercentage: 70 },
+    { fundId: "B", isin: "ISIN-B", name: "Fondo Bonos", category: "Renta Fija", shares: 40, averageBuyPrice: 45, currentNAV: 50, lastPriceUpdate: null, currentValue: 2000, invested: 1800, pnl: 200, pnlPercentage: 11.11, portfolioPercentage: 20, targetPercentage: 30 },
   ],
   targets: [
     { fundId: "A", isin: "ISIN-A", name: "Fondo Mundial", targetPercentage: 70, currentPercentage: 80 },
