@@ -8,7 +8,15 @@ const percentSigned = new Intl.NumberFormat("es-ES", { minimumFractionDigits: 2,
 /** Número sin símbolo de moneda, de 2 a 4 decimales (para campos con la unidad en la etiqueta). */
 export const formatDecimal = (n: number) =>
   n.toLocaleString("es-ES", { useGrouping: true, minimumFractionDigits: 2, maximumFractionDigits: 4 });
-export const formatEur =(n: number) => eur.format(n);
+const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "2-digit", year: "numeric" });
+const dateTime = new Intl.DateTimeFormat("es-ES", { dateStyle: "long", timeStyle: "short" });
+
+/** Fecha corta (dd/mm/aaaa) en la zona horaria del navegador. */
+export const formatDate = (iso: string) => date.format(new Date(iso));
+/** Fecha y hora completas, para tooltips. */
+export const formatDateTime = (iso: string) => dateTime.format(new Date(iso));
+
+export const formatEur = (n: number) => eur.format(n);
 export const formatEurSigned = (n: number) => eurSigned.format(n);
 /** Precios de participación: 2 a 4 decimales. */
 export const formatPrice = (n: number) => price.format(n);

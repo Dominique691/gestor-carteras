@@ -26,7 +26,7 @@ beforeEach(() => {
   localStorage.clear();
   // Cartera vacía por defecto: estos tests solo comprueban rutas y sesión.
   vi.stubGlobal("fetch", vi.fn((url: string) =>
-    jsonResponse(200, url === "/api/funds" ? [] : emptyPortfolio),
+    jsonResponse(200, url === "/api/funds" || url === "/api/transactions" ? [] : emptyPortfolio),
   ));
 });
 afterEach(() => vi.unstubAllGlobals());

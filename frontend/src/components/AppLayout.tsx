@@ -15,19 +15,19 @@ export function AppLayout() {
   return (
     <div className="min-h-screen bg-muted/30">
       <header className="border-b bg-background">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
-          <div className="flex items-center gap-2 font-semibold">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:gap-6">
+          <div className="flex shrink-0 items-center gap-2 font-semibold">
             <TrendingUp className="size-5 text-primary" />
-            Gestor de Carteras
+            <span className="hidden sm:inline">Gestor de Carteras</span>
           </div>
-          <nav className="flex flex-1 items-center gap-1">
+          <nav className="flex min-w-0 flex-1 items-center gap-1">
             {links.map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-3",
                     isActive ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
                   )
                 }
@@ -38,7 +38,7 @@ export function AppLayout() {
             ))}
           </nav>
           <span className="hidden text-sm text-muted-foreground sm:inline">{user?.email}</span>
-          <Button variant="outline" size="sm" onClick={logout}>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={logout}>
             <LogOut /> Salir
           </Button>
         </div>

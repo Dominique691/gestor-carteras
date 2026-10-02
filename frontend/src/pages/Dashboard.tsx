@@ -2,6 +2,7 @@ import { ArrowDownRight, ArrowUpRight, Loader2, Minus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { AddTransactionDialog } from "@/components/AddTransactionDialog";
+import { TransactionHistory } from "@/components/TransactionHistory";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,7 +15,7 @@ import {
   formatPrice,
   formatShares,
 } from "@/lib/format";
-import type { Portfolio } from "@/lib/types";
+import type { Portfolio, TransactionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444"];
@@ -52,13 +53,26 @@ function Kpi({ title, children, sub }: { title: string; children: ReactNode; sub
 export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transactions, setTransactions] = useState<TransactionItem[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
+  // Cartera e historial se cargan en paralelo y fallan por separado: un error en uno no oculta el otro.
   const load = useCallback(async () => {
-    try {
-      setPortfolio(await api<Portfolio>("/api/portfolio"));
+    const [p, t] = await Promise.allSettled([
+      api<Portfolio>("/api/portfolio"),
+      api<TransactionItem[]>("/api/transactions"),
+    ]);
+    if (p.status === "fulfilled") {
+      setPortfolio(p.value);
       setError(null);
-    } catch {
+    } else {
       setError("No se pudo cargar la cartera");
+    }
+    if (t.status === "fulfilled") {
+      setTransactions(t.value);
+      setHistoryError(null);
+    } else {
+      setHistoryError("No se pudo cargar el historial de transacciones");
     }
   }, []);
 
@@ -191,7 +205,7 @@ export default function Dashboard() {
                     <TableBody>
                       {portfolio.positions.map((p) => (
                         <TableRow key={p.fundId}>
-                          <TableCell className="whitespace-normal font-medium">
+                          <TableCell className="min-w-56 whitespace-normal font-medium">
                             {p.name}
                             <div className="text-xs font-normal text-muted-foreground">{p.category}</div>
                           </TableCell>
@@ -216,6 +230,13 @@ export default function Dashboard() {
           )}
         </>
       )}
+
+      {historyError && (
+        <p role="alert" className="text-sm text-destructive">
+          {historyError}
+        </p>
+      )}
+      {transactions.length > 0 && <TransactionHistory transactions={transactions} />}
     </div>
   );
 }

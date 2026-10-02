@@ -44,6 +44,20 @@ export interface Portfolio {
 
 export type TransactionType = "BUY" | "SELL";
 
+/** Operación del historial (GET /api/transactions), de la más reciente a la más antigua. */
+export interface TransactionItem {
+  id: string;
+  fundId: string;
+  isin: string;
+  fundName: string;
+  type: TransactionType;
+  shares: number;
+  pricePerShare: number;
+  /** shares × pricePerShare, en €. */
+  total: number;
+  transactionDate: string;
+}
+
 export interface CreateTransactionBody {
   fundId: string;
   type: TransactionType;

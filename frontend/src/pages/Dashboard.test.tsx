@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fmt from "@/lib/format";
-import type { Fund, Portfolio } from "@/lib/types";
+import type { Fund, Portfolio, TransactionItem } from "@/lib/types";
 import Dashboard from "./Dashboard";
 
 // Intl usa espacios no separables; Testing Library normaliza el DOM pero no el texto esperado.
@@ -43,13 +43,18 @@ const json = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
 /** fetch simulado: responde según URL; `onPost` captura las transacciones enviadas. */
-function mockApi(data: Portfolio, onPost?: (body: unknown) => Response | Promise<Response>) {
+function mockApi(
+  data: Portfolio,
+  onPost?: (body: unknown) => Response | Promise<Response>,
+  history: TransactionItem[] = [],
+) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/portfolio") return json(200, data);
     if (url === "/api/funds") return json(200, funds);
     if (url === "/api/transactions" && init?.method === "POST") {
       return onPost ? onPost(JSON.parse(String(init.body))) : json(201, {});
     }
+    if (url === "/api/transactions") return json(200, history);
     return json(404, { error: "no encontrado" });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -161,7 +166,105 @@ describe("Dashboard", () => {
     vi.stubGlobal("fetch", vi.fn(() => json(500, { error: "boom" })));
     render(<Dashboard />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la cartera");
+    expect(await screen.findByText("No se pudo cargar la cartera")).toBeInTheDocument();
+  });
+});
+
+const tx = (n: number, over: Partial<TransactionItem> = {}): TransactionItem => ({
+  id: `t${n}`,
+  fundId: "f1",
+  isin: "IE00B03HD191",
+  fundName: "Vanguard Global Stock",
+  type: "BUY",
+  shares: 2.5,
+  pricePerShare: 512.34,
+  total: 1280.85,
+  transactionDate: new Date(Date.UTC(2026, 8, 30 - n, 12)).toISOString(),
+  ...over,
+});
+
+describe("Historial de transacciones", () => {
+  it("lista las operaciones con fecha, tipo, fondo, participaciones, precio e importe", async () => {
+    mockApi(portfolio, undefined, [
+      tx(1),
+      tx(2, { id: "venta", type: "SELL", fundName: "Vanguard Global Bond", isin: "IE00B18GC888", shares: 5, pricePerShare: 120, total: 600 }),
+    ]);
+    render(<Dashboard />);
+
+    const card = (await screen.findByText("Historial de transacciones")).closest("[data-slot=card]") as HTMLElement;
+    const history = within(card);
+    expect(history.getByText("2 operaciones, de la más reciente a la más antigua")).toBeInTheDocument();
+    expect(history.getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "Fecha", "Operación", "Fondo", "Participaciones", "Precio", "Importe",
+    ]);
+
+    const rows = history.getAllByRole("row").slice(1); // sin la cabecera
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText("Compra")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("29/09/2026")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("2,5")).toBeInTheDocument();
+    expect(within(rows[0]).getByText(eur(1280.85))).toBeInTheDocument();
+    expect(within(rows[1]).getByText("Venta")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("IE00B18GC888")).toBeInTheDocument();
+    expect(within(rows[1]).getByText(eur(600))).toBeInTheDocument();
+  });
+
+  it("muestra solo las 10 últimas y permite ver todas", async () => {
+    mockApi(portfolio, undefined, Array.from({ length: 13 }, (_, i) => tx(i)));
+    render(<Dashboard />);
+
+    const card = (await screen.findByText("Historial de transacciones")).closest("[data-slot=card]") as HTMLElement;
+    const history = within(card);
+    expect(history.getAllByRole("row")).toHaveLength(11); // cabecera + 10
+
+    await userEvent.click(history.getByRole("button", { name: "Ver todas (3 más)" }));
+    expect(history.getAllByRole("row")).toHaveLength(14);
+
+    await userEvent.click(history.getByRole("button", { name: "Ver solo las últimas" }));
+    expect(history.getAllByRole("row")).toHaveLength(11);
+  });
+
+  it("sin operaciones no muestra la tarjeta de historial", async () => {
+    mockApi(empty);
+    render(<Dashboard />);
+
+    await screen.findByText("Tu cartera está vacía");
+    expect(screen.queryByText("Historial de transacciones")).not.toBeInTheDocument();
+  });
+
+  it("si falla el historial avisa pero sigue mostrando la cartera", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url === "/api/portfolio") return json(200, portfolio);
+      return json(500, { error: "boom" });
+    }));
+    render(<Dashboard />);
+
+    expect(await screen.findByText("No se pudo cargar el historial de transacciones")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Indicadores" })).toBeInTheDocument();
+  });
+
+  it("se actualiza al registrar una transacción nueva", async () => {
+    let created = false;
+    const fetchMock = mockApi(portfolio, () => {
+      created = true;
+      return new Response(JSON.stringify({}), { status: 201 });
+    });
+    // tras crear, el backend devuelve ya la operación en el historial
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      url === "/api/transactions" && init?.method !== "POST" && created ? json(200, [tx(1)]) : base(url, init),
+    );
+    render(<Dashboard />);
+    await userEvent.click(await screen.findByRole("button", { name: /añadir transacción/i }));
+
+    const dialog = within(await screen.findByRole("dialog"));
+    await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
+    await userEvent.type(dialog.getByLabelText("Participaciones"), "2,5");
+    expect(screen.queryByText("Historial de transacciones")).not.toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Registrar compra" }));
+
+    expect(await screen.findByText("Historial de transacciones")).toBeInTheDocument();
   });
 });
 
@@ -175,7 +278,8 @@ describe("Añadir transacción", () => {
     await userEvent.click(dialog.getByRole("button", { name: "Registrar compra" }));
 
     expect(await dialog.findByRole("alert")).toHaveTextContent("Selecciona un fondo");
-    expect(fetchMock).not.toHaveBeenCalledWith("/api/transactions", expect.anything());
+    const posts = fetchMock.mock.calls.filter(([u, init]) => u === "/api/transactions" && init?.method === "POST");
+    expect(posts).toHaveLength(0);
   });
 
   it("registra una compra, cierra el modal y recarga la cartera", async () => {
