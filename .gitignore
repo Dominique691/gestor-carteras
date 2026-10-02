@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+*.log
+backend/src/generated
+
+# Generados por TypeScript
+*.tsbuildinfo
+
+# Variables de entorno locales (la plantilla .env.example sí se versiona)
+.env.*
+!.env.example
