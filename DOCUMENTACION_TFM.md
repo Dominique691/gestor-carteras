@@ -971,3 +971,24 @@ Las plantillas están en `backend/.env.example` y `frontend/.env.example`. Los a
 | `500` en login o registro | Las tablas no existen (falta `prisma db push`) o `DATABASE_URL` es incorrecta |
 | `Cannot find module .../generated/prisma` en Render | El Build Command no ejecutó `npm run build` |
 | Primera petición muy lenta | Render está despertando el servicio gratuito |
+
+### 6.7 Correo de recuperación de contraseña con Brevo
+
+Sin variables `SMTP_*` el backend usa una cuenta de pruebas de Ethereal, que no entrega a buzones reales. Para producción se puede usar el SMTP gratuito de [Brevo](https://www.brevo.com) (unos 300 correos al día).
+
+1. Crea una cuenta en Brevo y, en **Senders, Domains & Dedicated IPs → Senders**, añade y verifica una dirección de remitente (te llega un correo de confirmación). No hace falta dominio propio.
+2. En **SMTP & API → SMTP**, anota el servidor (`smtp-relay.brevo.com`) y el *login*, y genera una **clave SMTP**. Esa clave es la contraseña; no es la de tu cuenta.
+3. En Render, en **Environment**, añade:
+
+   | Variable | Valor |
+   |---|---|
+   | `SMTP_HOST` | `smtp-relay.brevo.com` |
+   | `SMTP_PORT` | `2525` (o `587`) |
+   | `SMTP_USER` | El login SMTP de Brevo |
+   | `SMTP_PASS` | La clave SMTP generada |
+   | `SMTP_FROM` | `"Gestor de Carteras" <remitente-verificado@tudominio.com>` |
+   | `FRONTEND_URL` | La URL de Vercel, sin barra final |
+
+4. Guarda: Render reinicia el servicio. Pide una recuperación desde `/forgot-password` con un usuario real y revisa el buzón (y la carpeta de spam).
+
+> Los planes gratuitos de Render pueden bloquear la salida por los puertos SMTP habituales (25, 465 y 587). Por eso se recomienda `2525`. Si el correo no llega, revisa los **Logs** de Render: un error de conexión o de autenticación aparece como «No se pudo enviar el email de recuperación».

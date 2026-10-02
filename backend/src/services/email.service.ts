@@ -33,6 +33,13 @@ function getTransporter(): Promise<Transporter> {
   return transporter;
 }
 
+/** Remitente: SMTP_FROM o, en su defecto, la cuenta SMTP_USER. */
+export function getFromAddress(): string {
+  const { SMTP_FROM, SMTP_USER } = process.env;
+  if (SMTP_FROM) return SMTP_FROM;
+  return SMTP_USER ? `Gestor de Carteras <${SMTP_USER}>` : '"Gestor de Carteras" <no-reply@gestor-carteras.local>';
+}
+
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
@@ -55,7 +62,7 @@ export function resetPasswordHtml(resetUrl: string): string {
 
 export async function sendResetPasswordEmail(email: string, resetUrl: string): Promise<void> {
   const info = await (await getTransporter()).sendMail({
-    from: process.env.SMTP_FROM ?? '"Gestor de Carteras" <no-reply@gestor-carteras.local>',
+    from: getFromAddress(),
     to: email,
     subject: "Restablece tu contraseña",
     text: `Para restablecer tu contraseña abre este enlace (caduca en 15 minutos): ${resetUrl}`,
