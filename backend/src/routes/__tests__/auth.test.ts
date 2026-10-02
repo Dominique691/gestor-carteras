@@ -37,7 +37,7 @@ import { buildApp } from "../../app.js";
 let app: FastifyInstance;
 
 const post = (url: string, payload: object) => app.inject({ method: "POST", url, payload });
-const credentials = { email: "ana@example.com", password: "Secreta123" };
+const credentials = { email: "ana@example.com", password: "Secreta123!" };
 
 beforeAll(async () => {
   vi.stubEnv("JWT_SECRET", "x".repeat(48));
@@ -106,8 +106,8 @@ describe("POST /api/auth/login", () => {
   it("rechaza contraseña incorrecta y usuario inexistente con el mismo 401", async () => {
     await post("/api/auth/register", credentials);
 
-    const badPassword = await post("/api/auth/login", { ...credentials, password: "OtraClave123" });
-    const unknownUser = await post("/api/auth/login", { email: "nadie@example.com", password: "Secreta123" });
+    const badPassword = await post("/api/auth/login", { ...credentials, password: "OtraClave123!" });
+    const unknownUser = await post("/api/auth/login", { email: "nadie@example.com", password: "Secreta123!" });
 
     expect(badPassword.statusCode).toBe(401);
     expect(unknownUser.statusCode).toBe(401);

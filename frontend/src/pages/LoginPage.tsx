@@ -3,9 +3,11 @@ import { useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PasswordStrengthMeter, getPasswordScore } from "@/components/PasswordStrengthMeter";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/api";
+import { MIN_PASSWORD_SCORE, meetsRequirements } from "@/lib/password";
 
 type Mode = "login" | "register";
 
@@ -20,6 +22,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const isLogin = mode === "login";
+  const passwordOk = isLogin || (meetsRequirements(password) && getPasswordScore(password) >= MIN_PASSWORD_SCORE);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -82,16 +85,14 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
-              {!isLogin && (
-                <p className="text-xs text-muted-foreground">Mínimo 8 caracteres, con una letra y un número.</p>
-              )}
+              {!isLogin && <PasswordStrengthMeter password={password} />}
             </div>
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
               </p>
             )}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full" disabled={loading || !passwordOk}>
               {loading && <Loader2 className="animate-spin" />}
               {isLogin ? "Entrar" : "Registrarme"}
             </Button>

@@ -13,8 +13,9 @@ export const registerSchema = z.object({
     .string()
     .min(8, "La contraseña debe tener al menos 8 caracteres")
     .max(72, "La contraseña no puede superar los 72 caracteres")
-    .regex(/[A-Za-z]/, "La contraseña debe contener una letra")
-    .regex(/\d/, "La contraseña debe contener un número"),
+    .regex(/[A-Z]/, "La contraseña debe contener al menos una letra mayúscula")
+    .regex(/\d/, "La contraseña debe contener al menos un número")
+    .regex(/[^A-Za-z0-9]/, "La contraseña debe contener al menos un carácter especial (!@#$%^&*)"),
 }) satisfies z.ZodType<RegisterRequestDto, unknown>;
 
 export const loginSchema = z.object({
