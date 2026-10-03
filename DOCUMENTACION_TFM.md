@@ -983,7 +983,7 @@ Sin variables `SMTP_*` el backend usa una cuenta de pruebas de Ethereal, que no 
    | Variable | Valor |
    |---|---|
    | `SMTP_HOST` | `smtp-relay.brevo.com` |
-   | `SMTP_PORT` | `2525` (o `587`) |
+   | `SMTP_PORT` | `2525` (no uses `587`: Render lo bloquea) |
    | `SMTP_USER` | El login SMTP de Brevo |
    | `SMTP_PASS` | La clave SMTP generada |
    | `SMTP_FROM` | `"Gestor de Carteras" <remitente-verificado@tudominio.com>` |
@@ -991,4 +991,4 @@ Sin variables `SMTP_*` el backend usa una cuenta de pruebas de Ethereal, que no 
 
 4. Guarda: Render reinicia el servicio. Pide una recuperación desde `/forgot-password` con un usuario real y revisa el buzón (y la carpeta de spam).
 
-> Los planes gratuitos de Render pueden bloquear la salida por los puertos SMTP habituales (25, 465 y 587). Por eso se recomienda `2525`. Si el correo no llega, revisa los **Logs** de Render: un error de conexión o de autenticación aparece como «No se pudo enviar el email de recuperación».
+> Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, revisa los **Logs** de Render: un error de conexión o de autenticación aparece como «No se pudo enviar el email de recuperación».
