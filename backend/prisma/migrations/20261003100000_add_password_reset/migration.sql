@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "resetPasswordExpires" TIMESTAMP(3),
+ADD COLUMN     "resetPasswordToken" TEXT;
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_resetPasswordToken_key" ON "User"("resetPasswordToken");

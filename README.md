@@ -35,7 +35,7 @@ Todos los importes se calculan con aritmética decimal exacta (no con coma flota
 | Capa | Tecnologías |
 |---|---|
 | **Frontend** | [React 19](https://react.dev) · [Vite 8](https://vite.dev) · TypeScript · [Tailwind CSS 4](https://tailwindcss.com) · [Shadcn UI](https://ui.shadcn.com) (sobre Radix UI) · React Router 7 · Recharts · Lucide |
-| **Backend** | [Fastify 5](https://fastify.dev) · TypeScript · [Prisma ORM 7](https://www.prisma.io) · Zod 4 (validación) · `@fastify/jwt` + `bcryptjs` (autenticación) |
+| **Backend** | [Fastify 5](https://fastify.dev) · TypeScript · [Prisma ORM 7](https://www.prisma.io) · Zod 4 (validación) · `@fastify/jwt` + `bcryptjs` (autenticación) · Nodemailer (correo de recuperación) |
 | **Base de datos** | [PostgreSQL](https://www.postgresql.org) (probado con la versión 17) |
 | **Datos de mercado** | API pública de [Yahoo Finance](https://finance.yahoo.com) consultada con `fetch` nativo (sin dependencias adicionales) |
 | **Testing** | [Vitest 5](https://vitest.dev) en ambos proyectos · React Testing Library + jsdom en el frontend |
@@ -94,6 +94,11 @@ Copy-Item backend\.env.example backend\.env
 | `MARKET_DATA_ENABLED` | Activa la actualización de precios con datos de mercado reales (Yahoo Finance). Con `false` la aplicación funciona sin conexión a internet, con los últimos precios guardados | `true` |
 | `MARKET_DATA_TTL_MINUTES` | Minutos durante los que un precio se considera vigente antes de volver a consultarlo | `15` |
 | `MARKET_DATA_TIMEOUT_MS` | Tiempo máximo de espera por consulta al proveedor, en milisegundos | `3000` |
+| `FRONTEND_URL` | Origen del frontend, sin barra final. Se usa para CORS y para el enlace del correo de recuperación. Sin definir, el backend acepta cualquier origen y el enlace apunta a `http://localhost:5173` (solo desarrollo). La plantilla `.env.example` ya trae `http://localhost:5173` | *(sin valor)* |
+| `SEED_DEMO_USER` | Con `false`, `prisma db seed` carga solo el catálogo de fondos, sin el usuario de demostración. Úsalo en cualquier base de datos que no sea local | `true` |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Opcionales. Servidor SMTP para el correo de recuperación de contraseña. Sin ellas se usa una cuenta de pruebas de Ethereal: el correo no llega a ningún buzón y el enlace se imprime en el log del backend | *(vacío)* |
+
+Variable del **frontend** (`frontend/.env.example`): `VITE_API_URL`, la URL pública del backend. Solo se necesita en producción; en desarrollo se deja vacía y Vite redirige `/api` al backend.
 
 Genera un `JWT_SECRET` aleatorio con:
 
@@ -101,7 +106,7 @@ Genera un `JWT_SECRET` aleatorio con:
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-> `backend/.env` está en el `.gitignore` y **no debe subirse al repositorio**. El frontend no necesita variables de entorno: en desarrollo Vite redirige `/api` al backend.
+> `backend/.env` está en el `.gitignore` y **no debe subirse al repositorio**. El frontend no necesita variables de entorno en desarrollo: Vite redirige `/api` al backend.
 
 ### 3.5 Base de datos: cliente, esquema y datos iniciales
 
@@ -115,7 +120,7 @@ npx prisma db seed      # carga el catálogo de fondos y el usuario de demostrac
 ```
 
 - `prisma generate` es necesario porque el cliente generado (`backend/src/generated/`) no se versiona.
-- `prisma db push` sincroniza el esquema directamente, sin historial de migraciones. El repositorio incluye además la migración versionada en `backend/prisma/migrations/`; si prefieres usarla, ejecuta en su lugar `npx prisma migrate deploy` (despliegue) o `npx prisma migrate dev` (desarrollo). No mezcles ambos métodos sobre la misma base de datos.
+- `prisma db push` sincroniza el esquema directamente, sin historial de migraciones. El repositorio incluye además las migraciones versionadas en `backend/prisma/migrations/`; si prefieres usarlas, ejecuta en su lugar `npx prisma migrate deploy` (despliegue) o `npx prisma migrate dev` (desarrollo). No mezcles ambos métodos sobre la misma base de datos.
 - `prisma db seed` es **idempotente**: puedes ejecutarlo varias veces sin duplicar fondos. Recrea cada vez la cartera del usuario de demostración y no pisa los precios ya sincronizados. Si la base de datos viene de una versión anterior con fondos sin cotización, los retira siempre que nadie los use (nunca borra operaciones ni objetivos de un usuario) y avisa de los que conserva.
 
 ### 3.6 Arrancar la aplicación
@@ -144,7 +149,9 @@ npm run build                      # compila backend (tsc → backend/dist) y fr
 npm run start --prefix backend     # arranca la API compilada
 ```
 
-El frontend compilado (`frontend/dist`) es estático y se sirve con cualquier servidor web; la API debe estar accesible en la ruta `/api` del mismo dominio (por ejemplo, mediante un proxy inverso).
+El frontend compilado (`frontend/dist`) es estático y se sirve con cualquier servidor web. Define `VITE_API_URL` con la URL pública del backend **antes de compilar** (se incrusta en el build) y `FRONTEND_URL` en el backend para que acepte ese origen (CORS). Si el frontend y la API comparten dominio, puedes dejar `VITE_API_URL` vacía y servir la API en `/api` con un proxy inverso.
+
+Para publicarla en la nube con Neon (base de datos), Render (backend) y Vercel (frontend), sigue la [guía de despliegue](./DOCUMENTACION_TFM.md#anexo-a-guía-de-despliegue-en-la-nube) (anexo A de la documentación técnica).
 
 ### 3.8 Resumen de scripts
 
@@ -180,24 +187,26 @@ gestor-carteras/
 │       ├── db.ts                 # Instancia única del cliente de Prisma
 │       ├── plugins/auth.ts       # Plugin JWT y hook `authenticate` para rutas protegidas
 │       ├── modules/              # Un módulo por dominio (rutas + esquemas Zod + tipos DTO)
-│       │   ├── auth/             #   registro, login y /me
+│       │   ├── auth/             #   registro, login, /me y recuperación de contraseña
 │       │   ├── funds/            #   catálogo de fondos
 │       │   ├── transactions/     #   alta y listado de operaciones
 │       │   └── portfolio/        #   cartera, objetivos y cálculo de coste medio
-│       ├── services/             # Lógica de negocio: valoración de cartera, rebalanceo y datos de mercado
+│       ├── services/             # Lógica de negocio: valoración de cartera, rebalanceo, datos de mercado y envío de email
 │       ├── lib/                  # Utilidades: aritmética decimal, formato de errores
-│       ├── routes/__tests__/     # Tests de integración de la autenticación
+│       ├── routes/__tests__/     # Tests de integración: autenticación, recuperación de contraseña, CORS, fondos y transacciones
 │       └── generated/            # Cliente de Prisma generado (no se versiona)
 │
 └── frontend/                     # SPA (React + Vite)
     ├── components.json           # Configuración de Shadcn UI
     ├── vite.config.ts            # Alias `@/`, plugin de Tailwind y proxy de `/api`
+    ├── vercel.json               # Redirige todas las rutas a index.html (SPA) en Vercel
+    ├── .env.example              # Plantilla de VITE_API_URL
     ├── vitest.config.ts          # Entorno jsdom y archivo de arranque de tests
     └── src/
-        ├── main.tsx              # Monta React con el enrutador y el contexto de sesión
-        ├── App.tsx               # Definición de rutas: /login, /dashboard, /rebalance
-        ├── pages/                # Pantallas: LoginPage, Dashboard, Rebalance (+ sus tests)
-        ├── components/           # AppLayout, RouteGuards, historial y diálogos de transacción y rebalanceo
+        ├── main.tsx              # Monta React con el enrutador, el tema y el contexto de sesión
+        ├── App.tsx               # Rutas: /login, /forgot-password, /reset-password, /dashboard, /rebalance
+        ├── pages/                # Pantallas: Login, ForgotPassword, ResetPassword, Dashboard, Rebalance (+ tests)
+        ├── components/           # AppLayout, RouteGuards, tema (ModeToggle), medidor de contraseña, historial y diálogos
         │   └── ui/               #   componentes base de Shadcn (button, card, table, dialog…)
         ├── context/AuthContext.tsx   # Sesión: guarda el JWT en localStorage
         ├── lib/                  # Cliente HTTP, tipos, formato monetario y cálculo de rebalanceo
@@ -208,10 +217,17 @@ gestor-carteras/
 
 ### Registro e inicio de sesión
 
-- Registro con **email** y **contraseña** (8-72 caracteres, con al menos una letra y un número). El email se normaliza a minúsculas y no puede repetirse.
+- Registro con **email** y **contraseña** (al menos 8 caracteres y como máximo 72 bytes, con al menos una mayúscula, un número y un carácter especial; un medidor de fortaleza guía al usuario). El límite es en bytes porque bcrypt ignora lo que pasa de 72: las tildes, la ñ o el € ocupan 2 o 3. El email se normaliza a minúsculas y no puede repetirse.
 - Las contraseñas se guardan cifradas con **bcrypt** (coste 12); nunca se almacenan ni se devuelven en claro.
 - El inicio de sesión devuelve un **JWT** que el frontend guarda en `localStorage` y envía en cada petición. Si el servidor responde 401 (token caducado o inválido), la sesión se cierra automáticamente.
-- Las rutas `/dashboard` y `/rebalance` están protegidas: sin sesión se redirige a `/login`.
+- Las rutas `/dashboard` y `/rebalance` están protegidas: sin sesión se redirige a `/login`. Las rutas `/login`, `/forgot-password` y `/reset-password` son solo para usuarios sin sesión.
+- La aplicación incluye un selector de tema (claro, oscuro o el del sistema), que se recuerda en el navegador.
+
+### Recuperación de contraseña
+
+- Desde `/forgot-password` el usuario indica su email y recibe un enlace a `/reset-password?token=…`. La respuesta es siempre la misma exista o no el email, para no revelar qué cuentas están registradas.
+- El token es aleatorio, **caduca a los 15 minutos** y es de un solo uso. En la base de datos solo se guarda su hash SHA-256.
+- El correo se envía por SMTP (en producción, Brevo; ver el [apartado A.7 de la documentación técnica](./DOCUMENTACION_TFM.md#a7-correo-de-recuperación-de-contraseña-con-brevo)). Sin SMTP configurado, en desarrollo se usa Ethereal y el enlace aparece en el log del backend.
 
 ### Dashboard con KPIs
 
@@ -223,7 +239,7 @@ gestor-carteras/
 ### Catálogo y transacciones
 
 - **Catálogo de fondos:** `GET /api/funds` devuelve los fondos disponibles (nombre, ISIN, categoría, valor liquidativo actual, ticker y fecha de la última actualización). El catálogo contiene **solo fondos que cotizan en bolsa**: 11 ETF populares (iShares Core MSCI World, Vanguard FTSE All-World, iShares Core S&P 500, Vanguard S&P 500, Xtrackers MSCI World, Amundi MSCI World, iShares Core MSCI EM IMI y 4 de renta fija). La API no lista ni permite comprar fondos sin ticker. El catálogo se carga al abrir el formulario de nueva transacción.
-- **Alta de transacciones** desde el botón **«Añadir transacción»**: compra o venta, fondo, fecha y cantidad, indicada **en participaciones o en euros** (en este caso, las participaciones se calculan como importe ÷ precio). El precio es el valor liquidativo actual del fondo y no es editable.
+- **Alta de transacciones** desde el botón **«Añadir transacción»**: compra o venta, fondo, fecha y cantidad, indicada **en participaciones o en euros** (en este caso, las participaciones se calculan como importe ÷ precio). En el formulario, el precio es el valor liquidativo actual del fondo y no es editable. La API, en cambio, acepta cualquier precio por participación: es una decisión deliberada para poder registrar más adelante el precio real de cada operación (ver la [sección 1.5 de la documentación técnica](./DOCUMENTACION_TFM.md#15-decisiones-de-diseño-relevantes)).
 - **Validaciones:** no se puede vender más de lo que se posee en esa fecha (incluidas las operaciones con fecha pasada), ni registrar fechas futuras. El saldo se valida bloqueando las escrituras concurrentes del mismo usuario.
 - **Histórico de transacciones:** en la parte inferior del Dashboard, la tarjeta **«Historial de transacciones»** lista todas las operaciones del usuario, de la más reciente a la más antigua: fecha, tipo (compra o venta), fondo con su ISIN, participaciones, precio e importe. Muestra las 10 últimas y un botón **«Ver todas»** despliega el resto. Se actualiza solo al registrar una operación nueva. Los datos vienen de `GET /api/transactions`, y las posiciones y el precio medio se calculan reproduciendo ese historial en orden cronológico.
 
@@ -258,7 +274,7 @@ El comando `npx prisma db seed` crea un usuario de demostración con una cartera
 | **Email** | `usuario@test.com` |
 | **Contraseña** | `Password123!` |
 
-> ⚠️ Son credenciales de **desarrollo**, públicas en este repositorio. No ejecutes el seed en un entorno real ni conserves este usuario fuera de local.
+> ⚠️ Son credenciales de **desarrollo**, públicas en este repositorio. En cualquier base de datos que no sea local, ejecuta el seed con `SEED_DEMO_USER=false` (carga solo el catálogo) y, si este usuario llegó a crearse, elimínalo.
 >
 > Cada ejecución del seed **recrea** las operaciones y los objetivos de este usuario, por lo que se perderán los cambios que hayas hecho con él. Si prefieres empezar con una cartera vacía, regístrate con tu propio email desde la pantalla de acceso.
 
@@ -284,7 +300,7 @@ Para ejecutar un archivo concreto o un test por nombre:
 ```bash
 cd backend
 npx vitest run src/services/__tests__/rebalance.test.ts
-npx vitest run -t "no genera aportaciones negativas"
+npx vitest run -t "nunca genera aportaciones negativas"
 ```
 
 **Qué cubren:**
@@ -293,9 +309,10 @@ npx vitest run -t "no genera aportaciones negativas"
 |---|---|---|
 | Backend | Unitarios | Cálculo de coste medio y validación de ventas (`portfolio.calc.test.ts`); algoritmo de rebalanceo: cartera 70/30, aportación de 1.000 €, ausencia de aportaciones negativas (`rebalance.test.ts`) |
 | Backend | Unitarios | Servicio de precios de mercado con la API externa simulada: respuesta correcta, errores HTTP/429, sin conexión, timeout, respuestas no válidas, divisa distinta del euro, caché, periodo de espera y **recuperación con la última cotización guardada** (`marketData.test.ts`) |
-| Backend | Integración | Flujo completo de registro, login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`); catálogo y sincronización de precios, con proveedor operativo y caído (`funds.test.ts`); solo se pueden comprar fondos que cotizan (`transactions.test.ts`) |
-| Frontend | Unitarios | Cálculo de rebalanceo en el cliente, reparto en céntimos y *parsing* de importes (`rebalance.test.ts`) |
-| Frontend | Integración | Rutas y sesión (`App.test.tsx`); KPIs, gráfico, tabla de fondos, historial de transacciones y modal de alta (`Dashboard.test.tsx`); recálculo dinámico y ejecución del rebalanceo (`Rebalance.test.tsx`) |
+| Backend | Unitarios | Esquemas de validación y política de contraseñas, incluido el límite de 72 bytes (`auth.schemas.test.ts`); servicio de correo: SMTP configurado, puerto por defecto, caída a Ethereal, remitente y propagación de errores (`email.test.ts`) |
+| Backend | Integración | Flujo completo de registro, login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`); recuperación de contraseña: token con caducidad, solo se guarda el hash, respuesta idéntica para emails inexistentes, token caducado o inválido y contraseña débil (`resetPassword.test.ts`); política de CORS con y sin `FRONTEND_URL` (`cors.test.ts`); catálogo y sincronización de precios, con proveedor operativo y caído (`funds.test.ts`); solo se pueden comprar fondos que cotizan (`transactions.test.ts`) |
+| Frontend | Unitarios | Cálculo de rebalanceo en el cliente, reparto en céntimos y *parsing* de importes (`rebalance.test.ts`); medidor de fortaleza de contraseña (`PasswordStrengthMeter.test.tsx`) |
+| Frontend | Integración | Rutas y sesión (`App.test.tsx`); KPIs, gráfico, tabla de fondos, historial de transacciones y modal de alta (`Dashboard.test.tsx`); recálculo dinámico y ejecución del rebalanceo (`Rebalance.test.tsx`); solicitud y restablecimiento de contraseña (`ResetPassword.test.tsx`); selector de tema claro/oscuro/sistema (`theme.test.tsx`) |
 
 Para comprobar que todo el proyecto está sano antes de entregar: `npm run build` y `npm run test`.
 
@@ -315,7 +332,7 @@ Para comprobar que todo el proyecto está sano antes de entregar: `npm run build
 - **Solo fondos cotizados:** el catálogo se limita a 11 ETF con cotización real. Los fondos de inversión tradicionales, que no cotizan en bolsa y se valoran una vez al día, no están soportados.
 - **Proveedor no oficial:** los precios proceden de la API pública de Yahoo Finance, que no tiene contrato de servicio y puede cambiar o limitar el acceso sin previo aviso. Es el precio de cotización en bolsa, que puede diferir ligeramente del valor liquidativo oficial, y puede tener retraso. Si el proveedor falla, la aplicación sigue funcionando con los últimos precios guardados.
 - **ISIN:** son los de fondos reales, pero conviene verificarlos antes de cualquier uso fuera del entorno académico.
-- **Precio de las operaciones:** al registrar una transacción se usa el valor liquidativo *actual*, aunque la fecha sea pasada. Por tanto, el precio medio y el P&L de operaciones históricas son aproximados.
+- **Precio de las operaciones:** el formulario registra cada transacción al valor liquidativo *actual*, aunque la fecha sea pasada. Por tanto, el precio medio y el P&L de operaciones históricas son aproximados. La API ya admite el precio real; falta exponerlo en el formulario.
 - **Historial sin filtros:** el historial de transacciones se muestra completo, sin filtros por fondo, tipo o fechas, y no permite editar ni eliminar operaciones ya registradas.
 - **Una sola divisa:** todos los importes se expresan en euros.
 - **Fiscalidad y comisiones:** no se modelan.

@@ -12,11 +12,17 @@ const email = z
   .toLowerCase()
   .pipe(z.email("Email no válido").max(254));
 
+/** bcrypt solo usa los primeros 72 bytes: con tildes, ñ o € (2-3 bytes) 72 caracteres pueden excederlos. */
+const BCRYPT_MAX_BYTES = 72;
+
 /** Reglas de complejidad compartidas por registro y restablecimiento. */
 const strongPassword = z
   .string()
   .min(8, "La contraseña debe tener al menos 8 caracteres")
-  .max(72, "La contraseña no puede superar los 72 caracteres")
+  .refine(
+    (p) => Buffer.byteLength(p, "utf8") <= BCRYPT_MAX_BYTES,
+    "La contraseña no puede superar los 72 bytes (las tildes, la ñ o el € cuentan como 2 o 3)",
+  )
   .regex(/[A-Z]/, "La contraseña debe contener al menos una letra mayúscula")
   .regex(/\d/, "La contraseña debe contener al menos un número")
   .regex(/[^A-Za-z0-9]/, "La contraseña debe contener al menos un carácter especial (!@#$%^&*)");
