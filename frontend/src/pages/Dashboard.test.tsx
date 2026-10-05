@@ -427,6 +427,7 @@ describe("Historial de transacciones", () => {
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
     await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
+    await userEvent.click(dialog.getByRole("button", { name: "Participaciones" }));
     await userEvent.type(dialog.getByLabelText("Participaciones"), "2,5");
     expect(screen.queryByText("Historial de transacciones")).not.toBeInTheDocument();
     await userEvent.click(dialog.getByRole("button", { name: "Registrar compra" }));
@@ -468,6 +469,7 @@ describe("Añadir transacción", () => {
     expect(price).toHaveAttribute("readonly");
     await userEvent.type(price, "999");
     expect(price).toHaveValue("512,34");
+    await userEvent.click(dialog.getByRole("button", { name: "Participaciones" }));
     await userEvent.type(dialog.getByLabelText("Participaciones"), "2,5");
     expect(dialog.getByText(eur(2.5 * 512.34))).toBeInTheDocument();
 
@@ -479,7 +481,7 @@ describe("Añadir transacción", () => {
     expect(portfolioCalls).toHaveLength(2); // carga inicial + recarga tras guardar
   });
 
-  it("permite indicar un importe en € y calcula las participaciones (importe ÷ precio)", async () => {
+  it("por defecto pide el importe en € y calcula las participaciones (importe ÷ precio)", async () => {
     const posted: unknown[] = [];
     mockApi(portfolio, (body) => {
       posted.push(body);
@@ -491,7 +493,7 @@ describe("Añadir transacción", () => {
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
     await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
-    await userEvent.click(dialog.getByRole("button", { name: "Importe (€)" }));
+    expect(dialog.getByRole("button", { name: "Importe (€)" })).toHaveAttribute("aria-pressed", "true");
     await userEvent.type(dialog.getByLabelText("Importe (€)"), "1000");
 
     // 1000 / 512,34 = 1,95183… → 1,9518 participaciones (4 decimales)
@@ -510,6 +512,7 @@ describe("Añadir transacción", () => {
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
     await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
+    await userEvent.click(dialog.getByRole("button", { name: "Participaciones" }));
     await userEvent.type(dialog.getByLabelText("Participaciones"), "2");
 
     await userEvent.click(dialog.getByRole("button", { name: "Importe (€)" }));
@@ -527,7 +530,6 @@ describe("Añadir transacción", () => {
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
     await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
-    await userEvent.click(dialog.getByRole("button", { name: "Importe (€)" }));
     await userEvent.type(dialog.getByLabelText("Importe (€)"), "100,123");
     await userEvent.click(dialog.getByRole("button", { name: "Registrar compra" }));
 
@@ -552,6 +554,7 @@ describe("Añadir transacción", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Venta" }));
     await userEvent.click(dialog.getByRole("combobox", { name: "Fondo" }));
     await userEvent.click(await screen.findByRole("option", { name: "Vanguard Global Stock" }));
+    await userEvent.click(dialog.getByRole("button", { name: "Participaciones" }));
     await userEvent.type(dialog.getByLabelText("Participaciones"), "9");
     await userEvent.click(dialog.getByRole("button", { name: "Registrar venta" }));
 

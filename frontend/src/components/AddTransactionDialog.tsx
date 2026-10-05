@@ -37,7 +37,7 @@ export function AddTransactionDialog({ onCreated }: Props) {
   const [funds, setFunds] = useState<Fund[]>([]);
   const [fundId, setFundId] = useState("");
   const [type, setType] = useState<TransactionType>("BUY");
-  const [mode, setMode] = useState<InputMode>("shares");
+  const [mode, setMode] = useState<InputMode>("amount");
   const [shares, setShares] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayISO);
@@ -55,7 +55,7 @@ export function AddTransactionDialog({ onCreated }: Props) {
   function reset() {
     setFundId("");
     setType("BUY");
-    setMode("shares");
+    setMode("amount");
     setShares("");
     setAmount("");
     setDate(todayISO());
