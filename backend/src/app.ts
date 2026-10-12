@@ -12,7 +12,8 @@ export async function buildApp(opts: { logger?: boolean } = {}) {
 
   // Con FRONTEND_URL solo se acepta ese origen; sin ella (desarrollo/demo) se permite cualquiera.
   const frontendUrl = process.env.FRONTEND_URL?.trim().replace(/\/+$/, "");
-  await app.register(cors, { origin: frontendUrl || "*" });
+  // @fastify/cors solo permite GET, HEAD y POST por defecto: PUT y DELETE (aportaciones automáticas) se bloquearían.
+  await app.register(cors, { origin: frontendUrl || "*", methods: ["GET", "HEAD", "POST", "PUT", "DELETE"] });
 
   await app.register(authPlugin);
   await app.register(authRoutes, { prefix: "/api/auth" });
