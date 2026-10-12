@@ -131,6 +131,31 @@ describe("POST /api/cron/contributions/run-due", () => {
     expect(res.json()).toEqual({ executed: 2, failed: 0, users: 1 });
   });
 
+  it.each([
+    ["application/x-www-form-urlencoded", ""], // lo que envía cron-job.org
+    ["application/json", ""],
+    ["application/json", "{}"],
+    ["text/plain", "hola"],
+  ])("acepta cualquier cuerpo (Content-Type %s) y lo ignora", async (contentType, payload) => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/cron/contributions/run-due",
+      headers: { authorization: "Bearer secreto-del-cron", "content-type": contentType },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("el resto de la API sigue rechazando JSON vacío o tipos no soportados", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/contributions",
+      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
+      payload: "amount=1",
+    });
+    expect(res.statusCode).toBe(415);
+  });
+
   it("rechaza un secreto incorrecto o ausente", async () => {
     for (const headers of [{}, { authorization: "Bearer otro" }]) {
       const res = await app.inject({ method: "POST", url: "/api/cron/contributions/run-due", headers });

@@ -89,6 +89,15 @@ export const contributionsCronRoutes: FastifyPluginAsync = async (app) => {
   if (!secret) return;
   const expected = Buffer.from(`Bearer ${secret}`);
 
+  // El cuerpo no se usa. Los servicios de cron envían cualquier Content-Type (cron-job.org usa
+  // application/x-www-form-urlencoded, que Fastify rechazaría con 415): se acepta y se ignora.
+  // Solo afecta a este plugin, que está encapsulado.
+  app.removeAllContentTypeParsers();
+  app.addContentTypeParser("*", (_request, payload, done) => {
+    payload.resume();
+    done(null, undefined);
+  });
+
   app.post("/run-due", async (request, reply) => {
     const given = Buffer.from(request.headers.authorization ?? "");
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
