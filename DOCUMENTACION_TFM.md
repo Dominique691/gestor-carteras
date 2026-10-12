@@ -175,6 +175,8 @@ erDiagram
     Fund ||--o{ Transaction : "es objeto de"
     User ||--o{ TargetAllocation : "define"
     Fund ||--o{ TargetAllocation : "es objetivo en"
+    User ||--o| ContributionPlan : "programa"
+    User ||--o{ ContributionRun : "registra"
 
     User {
         uuid id PK
@@ -212,6 +214,26 @@ erDiagram
         uuid userId PK, FK "User.id, borrado en cascada"
         uuid fundId PK, FK "Fund.id"
         decimal targetPercentage "NUMERIC(5,2)"
+    }
+
+    ContributionPlan {
+        uuid userId PK, FK "User.id, borrado en cascada"
+        decimal amount "NUMERIC(12,2)"
+        enum frequency "MONTHLY, QUARTERLY, SEMIANNUAL o ANNUAL"
+        datetime startDate
+        datetime nextRunAt
+        boolean active
+    }
+
+    ContributionRun {
+        uuid id PK
+        uuid userId FK "User.id, borrado en cascada"
+        datetime scheduledFor "único junto con userId"
+        datetime executedAt
+        decimal amount "NUMERIC(12,2)"
+        enum status "SUCCESS o FAILED"
+        int purchases
+        string message "opcional"
     }
 ```
 
@@ -264,6 +286,30 @@ erDiagram
 | `userId` | UUID | Clave primaria compuesta; clave foránea → `User`; borrado en cascada | Usuario. |
 | `fundId` | UUID | Clave primaria compuesta; clave foránea → `Fund` | Fondo. |
 | `targetPercentage` | `NUMERIC(5,2)` | — | Porcentaje objetivo (0-100, dos decimales). |
+
+**`ContributionPlan`**: aportación periódica automática de un usuario (como máximo una).
+
+| Campo | Tipo | Restricciones | Descripción |
+|---|---|---|---|
+| `userId` | UUID | Clave primaria; clave foránea → `User`; borrado en cascada | Usuario. |
+| `amount` | `NUMERIC(12,2)` | — | Importe de cada aportación, en €. |
+| `frequency` | Enumerado | `MONTHLY`, `QUARTERLY`, `SEMIANNUAL` o `ANNUAL` | Periodicidad (1, 3, 6 o 12 meses). |
+| `startDate` | Fecha y hora | — | Primera aportación; fija el día del mes de las siguientes. |
+| `nextRunAt` | Fecha y hora | Índice `(active, nextRunAt)` | Próxima ejecución pendiente. |
+| `active` | Booleano | Por defecto `true` | Si está en pausa no se ejecuta. |
+
+**`ContributionRun`**: cada aportación automática ejecutada o fallida.
+
+| Campo | Tipo | Restricciones | Descripción |
+|---|---|---|---|
+| `id` | UUID | Clave primaria | Identificador. |
+| `userId` | UUID | Clave foránea → `User`; borrado en cascada | Usuario. |
+| `scheduledFor` | Fecha y hora | Único junto con `userId` | Fecha programada. La restricción impide ejecutar dos veces la misma aportación. |
+| `executedAt` | Fecha y hora | — | Momento real de la ejecución. |
+| `amount` | `NUMERIC(12,2)` | — | Importe aportado. |
+| `status` | Enumerado | `SUCCESS` o `FAILED` | Resultado. |
+| `purchases` | Entero | — | Compras creadas. |
+| `message` | Texto | Admite nulo | Motivo del fallo. |
 
 ### 2.3 Cardinalidades y reglas de integridad
 
@@ -332,6 +378,10 @@ erDiagram
 | `GET` | `/api/portfolio/history` | Sí | Evolución del capital invertido y del valor de mercado. |
 | `POST` | `/api/portfolio/targets` | Sí | Definición de los porcentajes objetivo. |
 | `GET` | `/api/portfolio/rebalance` | Sí | Cálculo de rebalanceo por aportación. |
+| `GET` | `/api/contributions` | Sí | Aportación automática y sus últimas ejecuciones. |
+| `PUT` | `/api/contributions` | Sí | Crea, modifica, pausa o reanuda la aportación automática. |
+| `DELETE` | `/api/contributions` | Sí | Elimina la aportación automática. |
+| `POST` | `/api/cron/contributions/run-due` | Secreto | Ejecuta las aportaciones vencidas de todos los usuarios (cron externo). |
 
 ### 3.2 Comprobación de estado
 
@@ -906,6 +956,69 @@ Un fondo con posición pero sin objetivo se trata como objetivo 0 %; un fondo co
 | `400` | `newContribution` no es un importe válido. |
 | `422` | `{ "error": "Define primero tus porcentajes objetivo (POST /api/portfolio/targets)" }` |
 
+### 3.7 Aportaciones automáticas
+
+Cada usuario puede programar una aportación periódica. En cada fecha se reparte con el mismo algoritmo de rebalanceo (sección 4), usando los objetivos **guardados en ese momento**, y se registran las compras resultantes como transacciones `BUY`. Es un registro en la aplicación: no mueve dinero real.
+
+**Calendario.** Las fechas se calculan desde `startDate`: `startDate + k × periodo` (1, 3, 6 o 12 meses). Si el mes destino no tiene ese día, se usa el último (un plan del día 31 cae el 28 o 29 de febrero y vuelve al 31 en marzo).
+
+**Ejecución.** Una aportación vencida se ejecuta en una transacción de base de datos que bloquea la fila del usuario, igual que `POST /api/transactions`:
+
+1. Calcula el rebalanceo de `amount` con los objetivos guardados.
+2. Solo compra fondos que cotizan. Lo que corresponda a un fondo sin cotización se reparte entre los demás, en céntimos enteros, para que las compras sumen exactamente `amount`.
+3. Crea las compras al **precio actual** y con la **fecha real de ejecución**: si se ejecuta con retraso no se inventa un precio del pasado.
+4. Registra un `ContributionRun` (único por usuario y fecha programada) y avanza `nextRunAt` a la siguiente fecha. Si falla (por ejemplo, porque no hay objetivos), se registra como `FAILED` con su motivo y también se avanza, para no reintentar sin fin.
+
+Si se han acumulado varias fechas, cada una se ejecuta una vez (con un máximo de 24 por pasada).
+
+**Disparadores.** El backend gratuito de Render se suspende tras unos minutos sin tráfico, de modo que un temporizador no basta. La misma función se invoca desde tres sitios, y el bloqueo y la restricción única impiden duplicados:
+
+- un **temporizador** del proceso, al arrancar y cada `CONTRIBUTIONS_CHECK_MINUTES` (15 por defecto; `0` lo desactiva);
+- la **puesta al día al usar la app**: antes de responder a `/api/portfolio…`, `/api/transactions` y `/api/contributions` se ejecutan las aportaciones vencidas del usuario, así que el Dashboard nunca muestra una cartera sin ellas;
+- un **cron externo** (anexo A.8), que llama a `POST /api/cron/contributions/run-due` para despertar el servidor el día que toca.
+
+#### `GET /api/contributions`
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`.
+- **Respuesta `200 OK`:** el plan (o `null`) y las 12 últimas ejecuciones, de la más reciente a la más antigua.
+
+```json
+{
+  "plan": { "amount": 300, "frequency": "MONTHLY", "startDate": "2026-10-15", "active": true, "nextRunAt": "2026-11-15" },
+  "runs": [
+    { "id": "…", "scheduledFor": "2026-10-15", "executedAt": "2026-10-15T00:04:12.000Z", "amount": 300, "status": "SUCCESS", "purchases": 2, "message": null }
+  ]
+}
+```
+
+`nextRunAt` es `null` si el plan está en pausa.
+
+#### `PUT /api/contributions`
+
+Crea o sustituye el plan del usuario. También sirve para pausarlo (`active: false`) o reanudarlo.
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`, `Content-Type: application/json`.
+- **Entrada:**
+
+| Campo | Tipo | Reglas |
+|---|---|---|
+| `amount` | number o string | Al menos 1 €, hasta 2 decimales. |
+| `frequency` | string | `MONTHLY`, `QUARTERLY`, `SEMIANNUAL` o `ANNUAL`. |
+| `startDate` | string | Fecha `YYYY-MM-DD`. |
+| `active` | boolean | Opcional; `true` por defecto. |
+
+- **Comportamiento:** `nextRunAt` es la primera fecha del calendario desde hoy que aún no se haya ejecutado. Guardar o reanudar un plan **nunca** pone al día periodos pasados. Si esa fecha es hoy, la aportación se ejecuta antes de responder.
+- **Respuesta `200 OK`:** misma estructura que `GET`.
+- **Errores:** `400` (datos no válidos, con `details`); `422` si se activa sin objetivos guardados.
+
+#### `DELETE /api/contributions`
+
+Elimina el plan; las ejecuciones ya registradas y sus compras se conservan. Responde `204 No Content`.
+
+#### `POST /api/cron/contributions/run-due`
+
+Solo existe si se define `CRON_SECRET`, y exige la cabecera `Authorization: Bearer <CRON_SECRET>` (comparada en tiempo constante); si no coincide, responde `401`. Ejecuta las aportaciones vencidas de todos los usuarios y responde con un resumen: `{ "executed": 3, "failed": 0, "users": 2 }`.
+
 ---
 
 ## 4. Algoritmo de rebalanceo
@@ -1068,7 +1181,8 @@ Observaciones:
 - **Precio de las operaciones.** El formulario registra las operaciones al valor liquidativo actual, aunque la fecha sea pasada. La API ya admite el precio real (sección 1.5); exponerlo en el formulario permitiría una valoración histórica precisa del coste medio.
 - **Rebalanceo con ventas.** El algoritmo se limita deliberadamente al rebalanceo por aportación. Un modo alternativo podría proponer ventas cuando la desviación supere un umbral, teniendo en cuenta su coste fiscal.
 - **Historial de transacciones.** El Dashboard muestra el historial completo, pero sin filtros por fondo, tipo o fechas, y las operaciones registradas no pueden editarse ni anularse. Una mejora natural es añadir filtros, paginación en servidor y la corrección de operaciones erróneas.
-- **Evolución temporal.** No se almacena la serie histórica del patrimonio; añadirla permitiría mostrar gráficos de evolución y rentabilidades anualizadas.
+- **Evolución temporal.** No se almacena un histórico de valores liquidativos: la gráfica de evolución estima los valores intermedios interpolando entre precios conocidos (sección 3.5). Guardar la serie real permitiría una evolución exacta y rentabilidades anualizadas.
+- **Aportaciones automáticas.** Se registran al precio del momento en que se ejecutan, que en el plan gratuito de Render puede ser algo posterior a la fecha programada si no hay un cron externo configurado. Hay un solo plan por usuario.
 - **Divisa y fiscalidad.** El sistema trabaja en euros y no modela comisiones ni impuestos.
 
 ---
@@ -1147,6 +1261,8 @@ Si `FRONTEND_URL` no está definida, el backend acepta cualquier origen y el enl
 | `FRONTEND_URL` | Backend | Origen del frontend: CORS y enlaces de los correos |
 | `PORT` | Backend | Lo inyecta Render; en local, 3001 por defecto |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Backend | Opcionales. Sin ellas, el correo de recuperación usa una cuenta de pruebas de Ethereal y no llega a ningún buzón real |
+| `CRON_SECRET` | Backend | Opcional. Habilita `POST /api/cron/contributions/run-due` para el cron externo de aportaciones (A.8) |
+| `CONTRIBUTIONS_CHECK_MINUTES` | Backend | Opcional. Cada cuántos minutos comprueba el proceso las aportaciones vencidas (15; `0` lo desactiva) |
 | `SEED_DEMO_USER` | Seed (local) | Con `false`, el seed carga solo el catálogo, sin el usuario de demostración |
 | `VITE_API_URL` | Frontend | URL pública del backend. Se incrusta al compilar: si cambia, hay que volver a desplegar |
 
@@ -1183,3 +1299,16 @@ Sin variables `SMTP_*`, el backend usa una cuenta de pruebas de Ethereal, que no
 4. Al guardar, Render reinicia el servicio. Los correos de activación de cuenta y de recuperación de contraseña usan esta misma configuración. Para comprobarlo, se registra un usuario o se solicita una recuperación desde `/forgot-password` con un usuario real y se revisa el buzón (incluida la carpeta de correo no deseado).
 
 > Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, los **Logs** de Render muestran cualquier error de conexión o de autenticación con el mensaje «No se pudo enviar el email de verificación» o «No se pudo enviar el email de recuperación».
+
+### A.8 Cron externo para las aportaciones automáticas
+
+En el plan gratuito, Render suspende el backend tras unos 15 minutos sin tráfico. Las aportaciones vencidas se ejecutan igualmente cuando el usuario abre la aplicación, pero para que se registren el día que toca hace falta que algo despierte el servidor:
+
+1. Se genera un secreto largo (`openssl rand -hex 32`) y se añade en Render como `CRON_SECRET`.
+2. En un servicio de cron gratuito (por ejemplo, [cron-job.org](https://cron-job.org)) se programa una petición diaria, a primera hora:
+   - Método `POST` a `https://<backend>.onrender.com/api/cron/contributions/run-due`.
+   - Cabecera `Authorization: Bearer <CRON_SECRET>`.
+   - Tiempo de espera amplio (unos 60 s): el primer arranque tras la suspensión tarda.
+3. La respuesta resume lo ejecutado (`executed`, `failed`, `users`). Los **Logs** de Render muestran además «Aportaciones automáticas: …».
+
+Una alternativa equivalente es un *workflow* programado de GitHub Actions con `curl`.

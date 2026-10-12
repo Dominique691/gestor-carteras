@@ -44,6 +44,7 @@ function mockApi() {
     if (url === "/api/funds") return json(200, funds);
     if (url === "/api/portfolio/targets") return json(200, []);
     if (url === "/api/transactions") return json(201, {});
+    if (url === "/api/contributions") return json(200, { plan: null, runs: [] });
     return json(404, { error: "no encontrado" });
   });
   vi.stubGlobal("fetch", fetchMock);
