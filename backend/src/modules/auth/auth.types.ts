@@ -41,6 +41,14 @@ export interface ResetPasswordRequestDto {
   newPassword: string;
 }
 
+export interface VerifyEmailRequestDto {
+  token: string;
+}
+
+export interface ResendVerificationRequestDto {
+  email: string;
+}
+
 export interface MessageResponseDto {
   message: string;
 }

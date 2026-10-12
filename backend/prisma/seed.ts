@@ -62,8 +62,8 @@ async function seedDemoUser() {
   const passwordHash = await bcrypt.hash(DEMO_USER.password, 12);
   const user = await prisma.user.upsert({
     where: { email: DEMO_USER.email },
-    update: { passwordHash },
-    create: { email: DEMO_USER.email, passwordHash },
+    update: { passwordHash, isEmailVerified: true },
+    create: { email: DEMO_USER.email, passwordHash, isEmailVerified: true },
   });
 
   const fundByIsin = new Map((await prisma.fund.findMany()).map((f) => [f.isin, f.id]));

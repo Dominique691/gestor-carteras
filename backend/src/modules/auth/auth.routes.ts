@@ -1,10 +1,17 @@
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { prisma } from "../../db.js";
 import { validationError } from "../../lib/http.js";
-import { sendResetPasswordEmail } from "../../services/email.service.js";
-import { forgotPasswordSchema, loginSchema, registerSchema, resetPasswordSchema } from "./auth.schemas.js";
+import { sendResetPasswordEmail, sendVerificationEmail } from "../../services/email.service.js";
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  registerSchema,
+  resendVerificationSchema,
+  resetPasswordSchema,
+  verifyEmailSchema,
+} from "./auth.schemas.js";
 import type { AuthResponseDto, AuthUserDto, ErrorResponseDto, MessageResponseDto } from "./auth.types.js";
 
 const BCRYPT_ROUNDS = 12;
@@ -14,8 +21,39 @@ const DUMMY_HASH = bcrypt.hashSync("dummy-password", BCRYPT_ROUNDS);
 export const RESET_TOKEN_TTL_MS = 15 * 60 * 1000;
 const FORGOT_MESSAGE = "Si el email existe en nuestro sistema, recibirás un enlace de recuperación";
 
-/** En base de datos solo se guarda el hash del token: una fuga de la BD no permite restablecer cuentas. */
+export const VERIFY_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const RESEND_MESSAGE = "Si hay una cuenta pendiente de verificar con ese email, recibirás un nuevo enlace de activación";
+export const UNVERIFIED_MESSAGE =
+  "Debes verificar tu email antes de iniciar sesión. Revisa tu bandeja de entrada o solicita un nuevo enlace de activación.";
+
+/** En base de datos solo se guarda el hash del token: una fuga de la BD no permite restablecer ni activar cuentas. */
 export const hashResetToken = (token: string) => createHash("sha256").update(token).digest("hex");
+
+const frontendUrl = (path: string, token: string) =>
+  `${(process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/+$/, "")}${path}?token=${token}`;
+
+/** Token de activación nuevo: devuelve el token en claro (para el enlace) y los campos a guardar. */
+function newVerificationToken() {
+  const token = randomBytes(32).toString("hex");
+  return {
+    token,
+    data: {
+      emailVerificationToken: hashResetToken(token),
+      emailVerificationExpires: new Date(Date.now() + VERIFY_TOKEN_TTL_MS),
+    },
+  };
+}
+
+/** Envía el enlace de activación sin bloquear la respuesta; un fallo solo se registra en el log. */
+function sendVerification(request: FastifyRequest, email: string, token: string) {
+  const verifyUrl = frontendUrl("/verify-email", token);
+  if (process.env.NODE_ENV !== "production") {
+    request.log.info(`Enlace de verificación para ${email}: ${verifyUrl}`);
+  }
+  sendVerificationEmail(email, verifyUrl).catch((err) =>
+    request.log.error({ err }, "No se pudo enviar el email de verificación"),
+  );
+}
 
 const toUserDto = (u: { id: string; email: string; createdAt: Date }): AuthUserDto => ({
   id: u.id,
@@ -24,7 +62,8 @@ const toUserDto = (u: { id: string; email: string; createdAt: Date }): AuthUserD
 });
 
 const authRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/register", async (request, reply): Promise<AuthResponseDto | ErrorResponseDto> => {
+  // El registro no inicia sesión: la cuenta queda pendiente hasta abrir el enlace enviado por email.
+  app.post("/register", async (request, reply): Promise<MessageResponseDto | ErrorResponseDto> => {
     const parsed = registerSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send(validationError(parsed.error.issues));
@@ -33,9 +72,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     try {
-      const user = await prisma.user.create({ data: { email, passwordHash } });
-      const token = app.jwt.sign({ sub: user.id, email: user.email });
-      return reply.code(201).send({ token, user: toUserDto(user) });
+      const { token, data } = newVerificationToken();
+      const user = await prisma.user.create({ data: { email, passwordHash, ...data } });
+      sendVerification(request, user.email, token);
+      return reply.code(201).send({
+        message: `Te hemos enviado un email a ${user.email} para activar tu cuenta. El enlace caduca en 24 horas.`,
+      });
     } catch (err) {
       if ((err as { code?: string }).code === "P2002") {
         return reply.code(409).send({ error: "El email ya está registrado" });
@@ -55,6 +97,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const ok = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
     if (!user || !ok) {
       return reply.code(401).send({ error: "Credenciales incorrectas" });
+    }
+    // Solo tras comprobar la contraseña: sin ella no se revela si una cuenta está pendiente de verificar.
+    if (!user.isEmailVerified) {
+      return reply.code(403).send({ error: UNVERIFIED_MESSAGE });
     }
 
     const token = app.jwt.sign({ sub: user.id, email: user.email });
@@ -78,8 +124,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         },
       });
 
-      const baseUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/+$/, "");
-      const resetUrl = `${baseUrl}/reset-password?token=${token}`;
+      const resetUrl = frontendUrl("/reset-password", token);
       if (process.env.NODE_ENV !== "production") {
         request.log.info(`Enlace de restablecimiento para ${user.email}: ${resetUrl}`);
       }
@@ -112,9 +157,53 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         passwordHash: await bcrypt.hash(newPassword, BCRYPT_ROUNDS),
         resetPasswordToken: null,
         resetPasswordExpires: null,
+        // Abrir el enlace enviado al email demuestra que es suyo: la cuenta queda verificada.
+        isEmailVerified: true,
+        emailVerificationToken: null,
+        emailVerificationExpires: null,
       },
     });
     return { message: "Contraseña actualizada correctamente" };
+  });
+
+  app.post("/verify-email", async (request, reply): Promise<MessageResponseDto | ErrorResponseDto> => {
+    const parsed = verifyEmailSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(validationError(parsed.error.issues));
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { emailVerificationToken: hashResetToken(parsed.data.token) },
+    });
+    if (!user) {
+      return reply.code(400).send({ error: "El enlace de activación no es válido o ya se ha usado" });
+    }
+    // 410 distingue la caducidad para que el cliente ofrezca pedir un enlace nuevo.
+    if (!user.emailVerificationExpires || user.emailVerificationExpires.getTime() < Date.now()) {
+      return reply.code(410).send({ error: "El enlace de activación ha caducado. Solicita uno nuevo." });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { isEmailVerified: true, emailVerificationToken: null, emailVerificationExpires: null },
+    });
+    return { message: "Email verificado. Ya puedes iniciar sesión." };
+  });
+
+  app.post("/resend-verification", async (request, reply): Promise<MessageResponseDto | ErrorResponseDto> => {
+    const parsed = resendVerificationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send(validationError(parsed.error.issues));
+    }
+
+    const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+    if (user && !user.isEmailVerified) {
+      const { token, data } = newVerificationToken();
+      await prisma.user.update({ where: { id: user.id }, data });
+      sendVerification(request, user.email, token);
+    }
+    // Misma respuesta en todos los casos (evita enumeración).
+    return { message: RESEND_MESSAGE };
   });
 
   app.get("/me", { onRequest: [app.authenticate] }, async (request, reply) => {

@@ -17,6 +17,12 @@ model User {
   resetPasswordToken   String?   @unique
   resetPasswordExpires DateTime?
 
+  /// Hasta verificar el email no se puede iniciar sesión.
+  isEmailVerified          Boolean   @default(false)
+  /// SHA-256 del token de verificación enviado por email (nunca se guarda el token en claro).
+  emailVerificationToken   String?   @unique
+  emailVerificationExpires DateTime?
+
   transactions      Transaction[]
   targetAllocations TargetAllocation[]
 }

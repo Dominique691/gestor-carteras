@@ -3,7 +3,9 @@ import type {
   ForgotPasswordRequestDto,
   LoginRequestDto,
   RegisterRequestDto,
+  ResendVerificationRequestDto,
   ResetPasswordRequestDto,
+  VerifyEmailRequestDto,
 } from "./auth.types.js";
 
 const email = z
@@ -39,7 +41,16 @@ export const loginSchema = z.object({
 
 export const forgotPasswordSchema = z.object({ email }) satisfies z.ZodType<ForgotPasswordRequestDto, unknown>;
 
+const token = z.string().min(1, "El token es obligatorio").max(256);
+
+export const verifyEmailSchema = z.object({ token }) satisfies z.ZodType<VerifyEmailRequestDto, unknown>;
+
+export const resendVerificationSchema = z.object({ email }) satisfies z.ZodType<
+  ResendVerificationRequestDto,
+  unknown
+>;
+
 export const resetPasswordSchema = z.object({
-  token: z.string().min(1, "El token es obligatorio").max(256),
+  token,
   newPassword: strongPassword,
 }) satisfies z.ZodType<ResetPasswordRequestDto, unknown>;

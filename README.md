@@ -35,7 +35,7 @@ Todos los importes se calculan con aritmética decimal exacta (no con coma flota
 | Capa | Tecnologías |
 |---|---|
 | **Frontend** | [React 19](https://react.dev) · [Vite 8](https://vite.dev) · TypeScript · [Tailwind CSS 4](https://tailwindcss.com) · [Shadcn UI](https://ui.shadcn.com) (sobre Radix UI) · React Router 7 · Recharts · Lucide |
-| **Backend** | [Fastify 5](https://fastify.dev) · TypeScript · [Prisma ORM 7](https://www.prisma.io) · Zod 4 (validación) · `@fastify/jwt` + `bcryptjs` (autenticación) · Nodemailer (correo de recuperación) |
+| **Backend** | [Fastify 5](https://fastify.dev) · TypeScript · [Prisma ORM 7](https://www.prisma.io) · Zod 4 (validación) · `@fastify/jwt` + `bcryptjs` (autenticación) · Nodemailer (correos de activación y recuperación) |
 | **Base de datos** | [PostgreSQL](https://www.postgresql.org) (probado con la versión 17) |
 | **Datos de mercado** | API pública de [Yahoo Finance](https://finance.yahoo.com) consultada con `fetch` nativo (sin dependencias adicionales) |
 | **Testing** | [Vitest 5](https://vitest.dev) en ambos proyectos · React Testing Library + jsdom en el frontend |
@@ -94,9 +94,9 @@ Copy-Item backend\.env.example backend\.env
 | `MARKET_DATA_ENABLED` | Activa la actualización de precios con datos de mercado reales (Yahoo Finance). Con `false` la aplicación funciona sin conexión a internet, con los últimos precios guardados | `true` |
 | `MARKET_DATA_TTL_MINUTES` | Minutos durante los que un precio se considera vigente antes de volver a consultarlo | `15` |
 | `MARKET_DATA_TIMEOUT_MS` | Tiempo máximo de espera por consulta al proveedor, en milisegundos | `3000` |
-| `FRONTEND_URL` | Origen del frontend, sin barra final. Se usa para CORS y para el enlace del correo de recuperación. Sin definir, el backend acepta cualquier origen y el enlace apunta a `http://localhost:5173` (solo desarrollo). La plantilla `.env.example` ya trae `http://localhost:5173` | *(sin valor)* |
+| `FRONTEND_URL` | Origen del frontend, sin barra final. Se usa para CORS y para los enlaces de los correos de activación y de recuperación. Sin definir, el backend acepta cualquier origen y el enlace apunta a `http://localhost:5173` (solo desarrollo). La plantilla `.env.example` ya trae `http://localhost:5173` | *(sin valor)* |
 | `SEED_DEMO_USER` | Con `false`, `prisma db seed` carga solo el catálogo de fondos, sin el usuario de demostración. Úsalo en cualquier base de datos que no sea local | `true` |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Opcionales. Servidor SMTP para el correo de recuperación de contraseña. Sin ellas se usa una cuenta de pruebas de Ethereal: el correo no llega a ningún buzón y el enlace se imprime en el log del backend | *(vacío)* |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Opcionales. Servidor SMTP para los correos de activación de cuenta y de recuperación de contraseña. Sin ellas se usa una cuenta de pruebas de Ethereal: el correo no llega a ningún buzón y el enlace se imprime en el log del backend | *(vacío)* |
 
 Variable del **frontend** (`frontend/.env.example`): `VITE_API_URL`, la URL pública del backend. Solo se necesita en producción; en desarrollo se deja vacía y Vite redirige `/api` al backend.
 
@@ -187,7 +187,7 @@ gestor-carteras/
 │       ├── db.ts                 # Instancia única del cliente de Prisma
 │       ├── plugins/auth.ts       # Plugin JWT y hook `authenticate` para rutas protegidas
 │       ├── modules/              # Un módulo por dominio (rutas + esquemas Zod + tipos DTO)
-│       │   ├── auth/             #   registro, login, /me y recuperación de contraseña
+│       │   ├── auth/             #   registro, verificación de email, login, /me y recuperación de contraseña
 │       │   ├── funds/            #   catálogo de fondos
 │       │   ├── transactions/     #   alta y listado de operaciones
 │       │   └── portfolio/        #   cartera, objetivos y cálculo de coste medio
@@ -204,7 +204,7 @@ gestor-carteras/
     ├── vitest.config.ts          # Entorno jsdom y archivo de arranque de tests
     └── src/
         ├── main.tsx              # Monta React con el enrutador, el tema y el contexto de sesión
-        ├── App.tsx               # Rutas: /login, /forgot-password, /reset-password, /dashboard, /rebalance
+        ├── App.tsx               # Rutas: /login, /forgot-password, /reset-password, /verify-email, /dashboard, /rebalance
         ├── pages/                # Pantallas: Login, ForgotPassword, ResetPassword, Dashboard, Rebalance (+ tests)
         ├── components/           # AppLayout, RouteGuards, tema (ModeToggle), medidor de contraseña, historial y diálogos
         │   └── ui/               #   componentes base de Shadcn (button, card, table, dialog…)
@@ -219,20 +219,22 @@ gestor-carteras/
 
 - Registro con **email** y **contraseña** (al menos 8 caracteres y como máximo 72 bytes, con al menos una mayúscula, un número y un carácter especial; un medidor de fortaleza guía al usuario). El límite es en bytes porque bcrypt ignora lo que pasa de 72: las tildes, la ñ o el € ocupan 2 o 3. El email se normaliza a minúsculas y no puede repetirse.
 - Las contraseñas se guardan cifradas con **bcrypt** (coste 12); nunca se almacenan ni se devuelven en claro.
+- **Verificación del email:** el registro no inicia sesión. Se envía un enlace a `/verify-email?token=…` que caduca a las **24 horas** y es de un solo uso (en la base de datos solo se guarda su hash SHA-256). Hasta abrirlo, el login responde 403 y ofrece reenviar el enlace; un enlace caducado también permite pedir otro. Restablecer la contraseña verifica la cuenta, porque demuestra el acceso al buzón.
 - El inicio de sesión devuelve un **JWT** que el frontend guarda en `localStorage` y envía en cada petición. Si el servidor responde 401 (token caducado o inválido), la sesión se cierra automáticamente.
-- Las rutas `/dashboard` y `/rebalance` están protegidas: sin sesión se redirige a `/login`. Las rutas `/login`, `/forgot-password` y `/reset-password` son solo para usuarios sin sesión.
+- Las rutas `/dashboard` y `/rebalance` están protegidas: sin sesión se redirige a `/login`. Las rutas `/login`, `/forgot-password` y `/reset-password` son solo para usuarios sin sesión; `/verify-email` es accesible siempre.
 - La aplicación incluye un selector de tema (claro, oscuro o el del sistema), que se recuerda en el navegador.
 
 ### Recuperación de contraseña
 
 - Desde `/forgot-password` el usuario indica su email y recibe un enlace a `/reset-password?token=…`. La respuesta es siempre la misma exista o no el email, para no revelar qué cuentas están registradas.
 - El token es aleatorio, **caduca a los 15 minutos** y es de un solo uso. En la base de datos solo se guarda su hash SHA-256.
-- El correo se envía por SMTP (en producción, Brevo; ver el [apartado A.7 de la documentación técnica](./DOCUMENTACION_TFM.md#a7-correo-de-recuperación-de-contraseña-con-brevo)). Sin SMTP configurado, en desarrollo se usa Ethereal y el enlace aparece en el log del backend.
+- El correo se envía por SMTP (en producción, Brevo; ver el [apartado A.7 de la documentación técnica](./DOCUMENTACION_TFM.md#a7-correo-de-activación-y-de-recuperación-de-contraseña-con-brevo)). Sin SMTP configurado, en desarrollo se usa Ethereal y el enlace aparece en el log del backend.
 
 ### Dashboard con KPIs
 
 - **Cuatro indicadores:** patrimonio total, inversión total, ganancia/pérdida en euros y rentabilidad en %. Las ganancias salen en verde y las pérdidas en rojo, con flecha para no depender solo del color.
 - **Gráfico circular** con la distribución de la cartera por categoría (Renta Variable frente a Renta Fija).
+- **Evolución del patrimonio:** gráfico de líneas del capital invertido frente al valor de mercado desde la primera operación. Los valores intermedios se estiman interpolando entre los precios de las operaciones y el precio actual.
 - **Tabla de fondos en cartera:** nombre, ISIN, participaciones, precio actual (con la fecha y hora de su última actualización), valor total, P&L (€ y %) y peso sobre la cartera.
 - **Botón «Actualizar precios de mercado»:** descarga al momento las cotizaciones reales de los ETF, muestra un indicador de carga y avisa con una notificación del resultado. Ver [Precios de mercado](#precios-de-mercado-reales).
 
@@ -310,9 +312,9 @@ npx vitest run -t "nunca genera aportaciones negativas"
 | Backend | Unitarios | Cálculo de coste medio y validación de ventas (`portfolio.calc.test.ts`); algoritmo de rebalanceo: cartera 70/30, aportación de 1.000 €, ausencia de aportaciones negativas (`rebalance.test.ts`) |
 | Backend | Unitarios | Servicio de precios de mercado con la API externa simulada: respuesta correcta, errores HTTP/429, sin conexión, timeout, respuestas no válidas, divisa distinta del euro, caché, periodo de espera y **recuperación con la última cotización guardada** (`marketData.test.ts`) |
 | Backend | Unitarios | Esquemas de validación y política de contraseñas, incluido el límite de 72 bytes (`auth.schemas.test.ts`); servicio de correo: SMTP configurado, puerto por defecto, caída a Ethereal, remitente y propagación de errores (`email.test.ts`) |
-| Backend | Integración | Flujo completo de registro, login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`); recuperación de contraseña: token con caducidad, solo se guarda el hash, respuesta idéntica para emails inexistentes, token caducado o inválido y contraseña débil (`resetPassword.test.ts`); política de CORS con y sin `FRONTEND_URL` (`cors.test.ts`); catálogo y sincronización de precios, con proveedor operativo y caído (`funds.test.ts`); solo se pueden comprar fondos que cotizan (`transactions.test.ts`) |
+| Backend | Integración | Flujo completo de registro, verificación de email (token con caducidad, de un solo uso, reenvío y login denegado con 403), login y rutas protegidas sobre la aplicación Fastify (`auth.test.ts`); recuperación de contraseña: token con caducidad, solo se guarda el hash, respuesta idéntica para emails inexistentes, token caducado o inválido y contraseña débil (`resetPassword.test.ts`); política de CORS con y sin `FRONTEND_URL` (`cors.test.ts`); catálogo y sincronización de precios, con proveedor operativo y caído (`funds.test.ts`); solo se pueden comprar fondos que cotizan (`transactions.test.ts`) |
 | Frontend | Unitarios | Cálculo de rebalanceo en el cliente, reparto en céntimos y *parsing* de importes (`rebalance.test.ts`); medidor de fortaleza de contraseña (`PasswordStrengthMeter.test.tsx`) |
-| Frontend | Integración | Rutas y sesión (`App.test.tsx`); KPIs, gráfico, tabla de fondos, historial de transacciones y modal de alta (`Dashboard.test.tsx`); recálculo dinámico y ejecución del rebalanceo (`Rebalance.test.tsx`); solicitud y restablecimiento de contraseña (`ResetPassword.test.tsx`); selector de tema claro/oscuro/sistema (`theme.test.tsx`) |
+| Frontend | Integración | Rutas y sesión (`App.test.tsx`); KPIs, gráfico, tabla de fondos, historial de transacciones y modal de alta (`Dashboard.test.tsx`); recálculo dinámico y ejecución del rebalanceo (`Rebalance.test.tsx`); solicitud y restablecimiento de contraseña (`ResetPassword.test.tsx`); activación de la cuenta con enlace válido, caducado o no válido (`VerifyEmail.test.tsx`); selector de tema claro/oscuro/sistema (`theme.test.tsx`) |
 
 Para comprobar que todo el proyecto está sano antes de entregar: `npm run build` y `npm run test`.
 

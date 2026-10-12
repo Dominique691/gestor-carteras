@@ -183,6 +183,9 @@ erDiagram
         datetime createdAt "por defecto: now()"
         string resetPasswordToken UK "opcional, hash SHA-256 del token de recuperación"
         datetime resetPasswordExpires "opcional, caducidad del token"
+        boolean isEmailVerified "por defecto: false"
+        string emailVerificationToken UK "opcional, hash SHA-256 del token de activación"
+        datetime emailVerificationExpires "opcional, caducidad del token de activación"
     }
 
     Fund {
@@ -224,6 +227,9 @@ erDiagram
 | `createdAt` | Fecha y hora | Por defecto `now()` | Fecha de alta. |
 | `resetPasswordToken` | Texto | Único; admite nulo | Hash SHA-256 del token de recuperación enviado por correo. Nunca se guarda el token en claro. Nulo si no hay una recuperación en curso. |
 | `resetPasswordExpires` | Fecha y hora | Admite nulo | Instante en que caduca el token (15 minutos tras la solicitud). |
+| `isEmailVerified` | Booleano | Por defecto `false` | Si el usuario ha confirmado su email. Sin confirmar no puede iniciar sesión. Las cuentas anteriores a la verificación se marcaron como verificadas al migrar. |
+| `emailVerificationToken` | Texto | Único; admite nulo | Hash SHA-256 del token de activación enviado por correo. Nulo una vez verificada la cuenta. |
+| `emailVerificationExpires` | Fecha y hora | Admite nulo | Instante en que caduca el token de activación (24 horas tras el registro o el reenvío). |
 
 **`Fund`**: fondo indexado del catálogo.
 
@@ -313,6 +319,8 @@ erDiagram
 | `GET` | `/api/health` | No | Comprobación de disponibilidad. |
 | `POST` | `/api/auth/register` | No | Alta de usuario. |
 | `POST` | `/api/auth/login` | No | Inicio de sesión. |
+| `POST` | `/api/auth/verify-email` | No | Activa la cuenta con el token recibido por correo. |
+| `POST` | `/api/auth/resend-verification` | No | Envía un nuevo enlace de activación. |
 | `POST` | `/api/auth/forgot-password` | No | Solicita el enlace de recuperación de contraseña por correo. |
 | `POST` | `/api/auth/reset-password` | No | Establece una nueva contraseña con el token recibido. |
 | `GET` | `/api/auth/me` | Sí | Datos del usuario autenticado. |
@@ -352,17 +360,11 @@ erDiagram
 { "email": "usuario@test.com", "password": "Password123!" }
 ```
 
+- **Comportamiento:** crea la cuenta **sin verificar** y no inicia sesión. Genera un token aleatorio (`randomBytes(32)`), guarda su hash SHA-256 con una caducidad de 24 horas y envía por correo un enlace `{FRONTEND_URL}/verify-email?token=…`. Como en la recuperación de contraseña, el envío no se espera: un fallo de SMTP se registra en el log (y el usuario puede pedir otro enlace con `resend-verification`).
 - **Respuesta `201 Created`:**
 
 ```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "832c2b08-112f-499d-b7d7-e81f4c67a84a",
-    "email": "usuario@test.com",
-    "createdAt": "2026-10-02T09:19:26.417Z"
-  }
-}
+{ "message": "Te hemos enviado un email a usuario@test.com para activar tu cuenta. El enlace caduca en 24 horas." }
 ```
 
 - **Errores:**
@@ -381,13 +383,51 @@ erDiagram
 { "email": "usuario@test.com", "password": "Password123!" }
 ```
 
-- **Respuesta `200 OK`:** misma estructura que el registro (`token` y `user`).
+- **Respuesta `200 OK`:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "832c2b08-112f-499d-b7d7-e81f4c67a84a",
+    "email": "usuario@test.com",
+    "createdAt": "2026-10-02T09:19:26.417Z"
+  }
+}
+```
+
 - **Errores:**
 
 | Código | Causa |
 |---|---|
 | `400` | Datos no válidos. |
 | `401` | `{ "error": "Credenciales incorrectas" }`: idéntico para email inexistente y contraseña errónea. |
+| `403` | Credenciales correctas pero email sin verificar: `{ "error": "Debes verificar tu email antes de iniciar sesión. Revisa tu bandeja de entrada o solicita un nuevo enlace de activación." }`. Solo se comprueba tras validar la contraseña, para no revelar el estado de una cuenta a quien no la conoce. |
+
+#### `POST /api/auth/verify-email`: activación de la cuenta
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:** `token` (string, el recibido por correo; obligatorio, máximo 256 caracteres).
+
+```json
+{ "token": "9f2c…" }
+```
+
+- **Respuesta `200 OK`:** `{ "message": "Email verificado. Ya puedes iniciar sesión." }`. La cuenta queda verificada y el token se borra, por lo que es de un solo uso.
+- **Errores:**
+
+| Código | Causa |
+|---|---|
+| `400` | Datos no válidos, o `{ "error": "El enlace de activación no es válido o ya se ha usado" }`. |
+| `410` | `{ "error": "El enlace de activación ha caducado. Solicita uno nuevo." }`. Un código propio permite al cliente ofrecer el reenvío. |
+
+#### `POST /api/auth/resend-verification`: nuevo enlace de activación
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:** `email` (string, mismas reglas que en el registro).
+- **Comportamiento:** si el email pertenece a una cuenta sin verificar, genera un token nuevo (el anterior deja de valer) con otras 24 horas de validez y lo envía por correo.
+- **Respuesta `200 OK`:** idéntica exista o no la cuenta, y esté o no verificada, para impedir la enumeración: `{ "message": "Si hay una cuenta pendiente de verificar con ese email, recibirás un nuevo enlace de activación" }`.
+- **Errores:** `400` si el email no es válido.
 
 #### `POST /api/auth/forgot-password`: solicitud de recuperación
 
@@ -417,7 +457,7 @@ erDiagram
 | `token` | string | El recibido por correo; obligatorio, máximo 256 caracteres. |
 | `newPassword` | string | Misma política que en el registro (al menos 8 caracteres, como máximo 72 bytes, mayúscula, número y carácter especial). |
 
-- **Respuesta `200 OK`:** `{ "message": "Contraseña actualizada correctamente" }`. El token queda invalidado.
+- **Respuesta `200 OK`:** `{ "message": "Contraseña actualizada correctamente" }`. El token queda invalidado. Como el enlace llegó al buzón del usuario, la cuenta queda además verificada si no lo estaba.
 - **Errores:**
 
 | Código | Causa |
@@ -1123,7 +1163,7 @@ Las plantillas están en `backend/.env.example` y `frontend/.env.example`. Los a
 | `Cannot find module .../generated/prisma` al ejecutar el seed | Falta `npx prisma generate` en la máquina local |
 | Primera petición muy lenta | Render está reactivando el servicio gratuito |
 
-### A.7 Correo de recuperación de contraseña con Brevo
+### A.7 Correo de activación y de recuperación de contraseña con Brevo
 
 Sin variables `SMTP_*`, el backend usa una cuenta de pruebas de Ethereal, que no entrega a buzones reales. En producción puede usarse el SMTP gratuito de [Brevo](https://www.brevo.com) (unos 300 correos al día).
 
@@ -1140,6 +1180,6 @@ Sin variables `SMTP_*`, el backend usa una cuenta de pruebas de Ethereal, que no
    | `SMTP_FROM` | `"Gestor de Carteras" <remitente-verificado@dominio.com>` |
    | `FRONTEND_URL` | La URL de Vercel, sin barra final |
 
-4. Al guardar, Render reinicia el servicio. Para comprobarlo, se solicita una recuperación desde `/forgot-password` con un usuario real y se revisa el buzón (incluida la carpeta de correo no deseado).
+4. Al guardar, Render reinicia el servicio. Los correos de activación de cuenta y de recuperación de contraseña usan esta misma configuración. Para comprobarlo, se registra un usuario o se solicita una recuperación desde `/forgot-password` con un usuario real y se revisa el buzón (incluida la carpeta de correo no deseado).
 
-> Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, los **Logs** de Render muestran cualquier error de conexión o de autenticación con el mensaje «No se pudo enviar el email de recuperación».
+> Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, los **Logs** de Render muestran cualquier error de conexión o de autenticación con el mensaje «No se pudo enviar el email de verificación» o «No se pudo enviar el email de recuperación».

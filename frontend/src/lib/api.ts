@@ -16,6 +16,10 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+export interface MessageResponse {
+  message: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
