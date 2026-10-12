@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fmt from "@/lib/format";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import type { Fund, Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
+import type { Fund, Portfolio, PortfolioHistoryPoint, SyncSummary, TransactionItem } from "@/lib/types";
 import Dashboard from "./Dashboard";
 
 // Intl usa espacios no separables; Testing Library normaliza el DOM pero no el texto esperado.
@@ -53,6 +53,14 @@ const summary = (updated = 2, failed = 0): SyncSummary => ({
   results: [],
 });
 
+const evolutionPoints: PortfolioHistoryPoint[] = [
+  { date: "2026-09-30", invested: 0, currentValue: 0 },
+  { date: "2026-10-01", invested: 3413.33, currentValue: 3413.33 },
+  { date: "2026-10-02", invested: 3413.33, currentValue: 3475.68 },
+];
+/** Respuesta de GET /api/portfolio/history; cada test puede sustituirla. */
+let evolutionResponse: () => Response | Promise<Response> = () => json(200, evolutionPoints);
+
 const json = (status: number, body: unknown) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 
@@ -65,6 +73,7 @@ function mockApi(
 ) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/portfolio") return json(200, data);
+    if (url === "/api/portfolio/history") return evolutionResponse();
     if (url === "/api/funds") return json(200, funds);
     if (url === "/api/funds/sync-prices" && init?.method === "POST") return onSync ? onSync() : json(200, summary());
     if (url === "/api/transactions" && init?.method === "POST") {
@@ -77,7 +86,10 @@ function mockApi(
   return fetchMock;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  evolutionResponse = () => json(200, evolutionPoints);
+});
 
 describe("Dashboard", () => {
   it("muestra los KPI con el patrimonio, la inversión y el P&L", async () => {
@@ -211,6 +223,47 @@ const syncCalls = (fetchMock: ReturnType<typeof mockApi>) =>
   fetchMock.mock.calls.filter(([u, init]) => u === "/api/funds/sync-prices" && init?.method === "POST");
 const portfolioCalls = (fetchMock: ReturnType<typeof mockApi>) =>
   fetchMock.mock.calls.filter(([u]) => u === "/api/portfolio");
+
+describe("Evolución del patrimonio", () => {
+  it("muestra un esqueleto mientras carga y luego la gráfica bajo la distribución por categoría", async () => {
+    let finish!: (r: Response) => void;
+    evolutionResponse = () => new Promise<Response>((res) => (finish = res));
+    mockApi(portfolio);
+    render(<Dashboard />);
+
+    expect(await screen.findByRole("status", { name: "Cargando evolución del patrimonio" })).toBeInTheDocument();
+    expect(screen.getByText("Distribución por categoría")).toBeInTheDocument();
+
+    finish(new Response(JSON.stringify(evolutionPoints), { status: 200 }));
+    const title = await screen.findByText("Evolución del patrimonio");
+    expect(screen.queryByRole("status", { name: "Cargando evolución del patrimonio" })).not.toBeInTheDocument();
+
+    // Orden en el DOM: distribución → evolución → fondos en cartera.
+    const distribution = screen.getByText("Distribución por categoría");
+    const fundsTitle = screen.getByText("Fondos en cartera");
+    expect(distribution.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(title.compareDocumentPosition(fundsTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("img", { name: /capital invertido es 3\.413,33.€ y el valor actual 3\.475,68.€/ })).toBeInTheDocument();
+  });
+
+  it("si falla la evolución avisa pero sigue mostrando la cartera", async () => {
+    evolutionResponse = () => json(500, { error: "fallo" });
+    mockApi(portfolio);
+    render(<Dashboard />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la evolución del patrimonio");
+    expect(screen.getByText("Fondos en cartera")).toBeInTheDocument();
+  });
+
+  it("con la cartera vacía no muestra la gráfica", async () => {
+    evolutionResponse = () => json(200, []);
+    mockApi(empty);
+    render(<Dashboard />);
+
+    expect(await screen.findByText("Tu cartera está vacía")).toBeInTheDocument();
+    expect(screen.queryByText("Evolución del patrimonio")).not.toBeInTheDocument();
+  });
+});
 
 describe("Precios de mercado", () => {
   it("muestra junto al precio de cada fondo cuándo se actualizó por última vez", async () => {

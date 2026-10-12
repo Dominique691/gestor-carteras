@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "../../db.js";
 import { Decimal } from "../../lib/decimal.js";
 import { validationError } from "../../lib/http.js";
-import { buildPortfolio } from "../../services/portfolio.service.js";
+import { buildPortfolio, buildPortfolioHistory } from "../../services/portfolio.service.js";
 import { marketData } from "../../services/marketData.service.js";
 import { getRebalance, NoTargetsError } from "../../services/rebalance.service.js";
 import { rebalanceQuerySchema, setTargetsSchema } from "./portfolio.schemas.js";
@@ -13,6 +13,12 @@ const portfolioRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (request) => {
     await marketData.refreshIfStale();
     return buildPortfolio(request.user.sub);
+  });
+
+  // Serie temporal de capital invertido vs. valor de mercado, para la gráfica de evolución.
+  app.get("/history", async (request) => {
+    await marketData.refreshIfStale();
+    return buildPortfolioHistory(request.user.sub);
   });
 
   app.get("/rebalance", async (request, reply) => {

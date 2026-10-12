@@ -89,3 +89,13 @@ export interface CreateTransactionBody {
   pricePerShare: number;
   transactionDate?: string;
 }
+
+/** Punto de GET /api/portfolio/history, en orden cronológico. */
+export interface PortfolioHistoryPoint {
+  /** Día (YYYY-MM-DD, UTC). */
+  date: string;
+  /** Capital invertido en las posiciones abiertas, en €. */
+  invested: number;
+  /** Valor de mercado estimado ese día, en €. */
+  currentValue: number;
+}

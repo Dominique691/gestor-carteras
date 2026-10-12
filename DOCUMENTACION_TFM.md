@@ -321,6 +321,7 @@ erDiagram
 | `GET` | `/api/transactions` | Sí | Historial de operaciones del usuario. |
 | `POST` | `/api/transactions` | Sí | Registro de una compra o venta. |
 | `GET` | `/api/portfolio` | Sí | Resumen valorado de la cartera. |
+| `GET` | `/api/portfolio/history` | Sí | Evolución del capital invertido y del valor de mercado. |
 | `POST` | `/api/portfolio/targets` | Sí | Definición de los porcentajes objetivo. |
 | `GET` | `/api/portfolio/rebalance` | Sí | Cálculo de rebalanceo por aportación. |
 
@@ -690,6 +691,28 @@ El MSCI World se compró en dos veces (40 participaciones a 112 € y 20 a 120 �
 | `targets` | Objetivos definidos, incluidos los de fondos sin posición (con `currentPercentage` igual a 0). |
 
 Las fórmulas se desarrollan en la sección 4.6.
+
+#### `GET /api/portfolio/history`: evolución del patrimonio
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`.
+- **Comportamiento:** refresca los precios caducados igual que `GET /api/portfolio` y devuelve una serie en orden cronológico, desde el día anterior a la primera operación (con 0 €, para que la gráfica no empiece cortada) hasta hoy. Hay un punto por día; si la serie supera los 400 días, uno por semana, conservando siempre los días con operaciones y el último. Sin operaciones devuelve `[]`.
+- **Respuesta `200 OK`:**
+
+```json
+[
+  { "date": "2026-09-30", "invested": 0, "currentValue": 0 },
+  { "date": "2026-10-01", "invested": 1000, "currentValue": 1000 },
+  { "date": "2026-10-02", "invested": 1000, "currentValue": 1050 }
+]
+```
+
+| Campo | Significado |
+|---|---|
+| `date` | Día (`YYYY-MM-DD`, UTC). |
+| `invested` | Coste de adquisición de las posiciones abiertas ese día (coste medio, igual que `totalInvested`). |
+| `currentValue` | Participaciones que se tenían ese día × precio estimado del fondo ese día. |
+
+**Precio estimado.** La aplicación no guarda un histórico de valores liquidativos, solo el último. Por eso el precio de cada fondo en cada día se obtiene por **interpolación lineal** entre los precios conocidos: el de cada operación de ese fondo y el NAV actual (situado en el día de hoy). Así el último punto coincide con `totalValue` y `totalInvested` de `GET /api/portfolio`, pero los valores intermedios son una aproximación y no reflejan la volatilidad real del mercado entre operaciones.
 
 #### `POST /api/portfolio/targets`: definición de objetivos
 
