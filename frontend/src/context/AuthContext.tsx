@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, setUnauthorizedHandler, TOKEN_KEY, type AuthResponse, type AuthUser } from "@/lib/api";
+import { api, setUnauthorizedHandler, TOKEN_KEY, type AuthResponse, type AuthUser, type MessageResponse } from "@/lib/api";
 
 const USER_KEY = "gestor.user";
 
@@ -8,7 +8,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  /** Crea la cuenta sin iniciar sesión (queda pendiente de verificar el email); devuelve el mensaje del backend. */
+  register: (email: string, password: string) => Promise<string>;
   logout: () => void;
 }
 
@@ -65,8 +66,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = useCallback(
     async (email: string, password: string) =>
-      setSession(await api<AuthResponse>("/api/auth/register", { body: { email, password } })),
-    [setSession],
+      (await api<MessageResponse>("/api/auth/register", { body: { email, password } })).message,
+    [],
   );
 
   // Si el backend responde 401 con un token guardado (caducado o inválido), se cierra la sesión.

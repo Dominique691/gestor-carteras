@@ -47,3 +47,13 @@ export interface PortfolioDto {
 export interface SetTargetsRequestDto {
   targets: { fundId: string; targetPercentage: number | string }[];
 }
+
+/** Punto de GET /api/portfolio/history. */
+export interface PortfolioHistoryPointDto {
+  /** Día (YYYY-MM-DD, UTC). */
+  date: string;
+  /** Coste de adquisición de las posiciones abiertas ese día, en €. */
+  invested: number;
+  /** Valor de mercado estimado ese día (participaciones × precio interpolado), en €. */
+  currentValue: number;
+}

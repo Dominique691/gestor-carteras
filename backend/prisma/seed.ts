@@ -35,7 +35,7 @@ const funds: SeedFund[] = [
   { isin: "IE00BG47KB92", ticker: "VAGF.DE", name: "Vanguard Global Aggregate Bond UCITS ETF EUR Hedged Acc", category: "Renta Fija", currentNAV: "23.0810" },
 ];
 
-// Usuario de demostración. Cumple la política de contraseñas de la API (≥ 8, letra y número).
+// Usuario de demostración. Cumple la política de contraseñas de la API (8-72, mayúscula, número y carácter especial).
 const DEMO_USER = { email: "usuario@test.com", password: "Password123!" };
 
 // Cartera de ejemplo: [ISIN, tipo, participaciones, precio, hace cuántos días]
@@ -62,8 +62,8 @@ async function seedDemoUser() {
   const passwordHash = await bcrypt.hash(DEMO_USER.password, 12);
   const user = await prisma.user.upsert({
     where: { email: DEMO_USER.email },
-    update: { passwordHash },
-    create: { email: DEMO_USER.email, passwordHash },
+    update: { passwordHash, isEmailVerified: true },
+    create: { email: DEMO_USER.email, passwordHash, isEmailVerified: true },
   });
 
   const fundByIsin = new Map((await prisma.fund.findMany()).map((f) => [f.isin, f.id]));
@@ -107,9 +107,15 @@ async function main() {
       create: fund,
     });
   }
-  await seedDemoUser();
+  // En producción se carga solo el catálogo: el usuario de demostración tiene una contraseña pública.
+  const withDemoUser = process.env.SEED_DEMO_USER !== "false";
+  if (withDemoUser) await seedDemoUser();
   const retired = await retireUntradedFunds();
-  console.log(`Seed completado: ${funds.length} fondos y usuario de demostración ${DEMO_USER.email}.`);
+  console.log(
+    withDemoUser
+      ? `Seed completado: ${funds.length} fondos y usuario de demostración ${DEMO_USER.email}.`
+      : `Seed completado: ${funds.length} fondos (sin usuario de demostración: SEED_DEMO_USER=false).`,
+  );
   if (retired.removed > 0) console.log(`Fondos sin cotización retirados del catálogo: ${retired.removed}.`);
   if (retired.kept.length > 0) {
     console.warn(

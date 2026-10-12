@@ -85,6 +85,30 @@ describe("login", () => {
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
   });
 
+  it("con la cuenta sin verificar muestra el aviso y permite reenviar el enlace", async () => {
+    const fetchMock = vi.fn((url: string) =>
+      url === "/api/auth/login"
+        ? jsonResponse(403, { error: "Debes verificar tu email antes de iniciar sesión." })
+        : jsonResponse(200, { message: "Si hay una cuenta pendiente de verificar con ese email, recibirás un nuevo enlace" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/login");
+    await userEvent.type(screen.getByLabelText("Email"), "ana@example.com");
+    await userEvent.type(screen.getByLabelText("Contraseña"), "Secreta123!");
+    await userEvent.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Debes verificar tu email");
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reenviar enlace de activación" }));
+    expect(await screen.findByText(/recibirás un nuevo enlace/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/auth/resend-verification",
+      expect.objectContaining({ body: JSON.stringify({ email: "ana@example.com" }) }),
+    );
+  });
+
   it("cierra la sesión y vuelve a /login al pulsar Salir", async () => {
     localStorage.setItem(TOKEN_KEY, "token-de-prueba");
     renderAt("/dashboard");
@@ -93,5 +117,27 @@ describe("login", () => {
 
     expect(await screen.findByRole("button", { name: "Entrar" })).toBeInTheDocument();
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+  });
+});
+
+describe("registro", () => {
+  it("no inicia sesión: pide revisar el correo y desde ahí vuelve al login", async () => {
+    const message = "Te hemos enviado un email a ana@example.com para activar tu cuenta. El enlace caduca en 24 horas.";
+    const fetchMock = vi.fn(() => jsonResponse(201, { message }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/login");
+    await userEvent.click(screen.getByRole("button", { name: "Regístrate" }));
+    await userEvent.type(screen.getByLabelText("Email"), "ana@example.com");
+    await userEvent.type(screen.getByLabelText("Contraseña"), "Cartera-Segura-2026!");
+    await userEvent.click(screen.getByRole("button", { name: "Registrarme" }));
+
+    expect(await screen.findByText("Revisa tu correo")).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/register", expect.objectContaining({ method: "POST" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Ir a iniciar sesión" }));
+    expect(screen.getByRole("button", { name: "Entrar" })).toBeInTheDocument();
   });
 });

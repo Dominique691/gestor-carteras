@@ -9,7 +9,8 @@ Este documento describe la arquitectura, el modelo de datos, la interfaz de prog
 3. [Especificación de la API REST](#3-especificación-de-la-api-rest)
 4. [Algoritmo de rebalanceo](#4-algoritmo-de-rebalanceo)
 5. [Limitaciones y trabajo futuro](#5-limitaciones-y-trabajo-futuro)
-6. [Guía de Despliegue en la Nube](#6-guía-de-despliegue-en-la-nube)
+
+Anexo A. [Guía de despliegue en la nube](#anexo-a-guía-de-despliegue-en-la-nube)
 
 ---
 
@@ -43,17 +44,21 @@ flowchart LR
         MOD["Módulos de dominio<br/>auth · funds · transactions · portfolio"]
         SVC["Servicios de negocio<br/>valoración de cartera · rebalanceo"]
         MD["Servicio de datos de mercado<br/>caché TTL · timeout · fallback"]
+        MAIL["Servicio de correo<br/>Nodemailer · SMTP"]
         ORM["Prisma ORM"]
         API --> JWT --> MOD --> SVC --> ORM
         MOD --> MD --> ORM
+        MOD --> MAIL
     end
 
     DB[("PostgreSQL<br/>User · Fund · Transaction · TargetAllocation")]
     YF["Yahoo Finance<br/>API pública de cotizaciones"]
+    SMTP["Servidor SMTP<br/>Brevo en producción"]
 
     SPA -- "HTTP/JSON<br/>Authorization: Bearer JWT" --> API
     ORM -- "SQL" --> DB
     MD -. "HTTPS · timeout 3 s" .-> YF
+    MAIL -. "SMTP" .-> SMTP
 ```
 
 ### 1.3 Responsabilidades por componente
@@ -64,7 +69,8 @@ flowchart LR
 | **Estilos y componentes** | Tailwind CSS 4, Shadcn UI | Sistema de diseño accesible y consistente (botones, tablas, diálogos, selectores). |
 | **API REST** | Fastify 5 | Enrutado, serialización JSON, gestión de errores y ciclo de vida de la petición. |
 | **Validación** | Zod 4 | Validación y normalización de todas las entradas antes de llegar a la lógica de negocio. |
-| **Autenticación** | `@fastify/jwt`, `bcryptjs` | Emisión y verificación de JWT; cifrado de contraseñas. |
+| **Autenticación** | `@fastify/jwt`, `bcryptjs` | Emisión y verificación de JWT; cifrado de contraseñas; tokens de recuperación de contraseña. |
+| **Correo** | Nodemailer, SMTP (Brevo) | Envío del enlace de recuperación de contraseña. Sin SMTP configurado, usa una cuenta de pruebas de Ethereal (solo desarrollo). |
 | **Servicios** | TypeScript | Reglas de negocio: coste medio, valoración de la cartera y cálculo de rebalanceo. |
 | **Datos de mercado** | `fetch` nativo, API de Yahoo Finance | Descarga de cotizaciones, actualización del valor liquidativo (`currentNAV`) y de la fecha de actualización de cada fondo, con caché y recuperación ante fallos. |
 | **Acceso a datos** | Prisma 7 | Modelo tipado, consultas, transacciones de base de datos y migraciones. |
@@ -94,12 +100,15 @@ sequenceDiagram
 
 ### 1.5 Decisiones de diseño relevantes
 
-- **Autenticación sin estado (JWT).** El servidor no almacena sesiones: cada petición lleva un token firmado (HS256) con el identificador y el email del usuario, y caducidad configurable (7 días por defecto). Esto simplifica el escalado horizontal. Las contraseñas se almacenan con **bcrypt** (coste 12) y la API responde igual ante un usuario inexistente y ante una contraseña incorrecta, para no revelar qué emails están registrados.
+- **Autenticación sin estado (JWT).** El servidor no almacena sesiones: cada petición lleva un token firmado (HS256) con el identificador y el email del usuario, y caducidad configurable (7 días por defecto). Esto simplifica el escalado horizontal. Las contraseñas se almacenan con **bcrypt** (coste 12) y la API responde igual ante un usuario inexistente y ante una contraseña incorrecta, para no revelar qué emails están registrados. El registro es la excepción: ante un email ya existente responde `409` con un mensaje explícito, lo que permite comprobar si una dirección tiene cuenta. Es un compromiso habitual a favor de la usabilidad (el usuario sabe que debe iniciar sesión o recuperar la contraseña); eliminarlo exigiría confirmar el alta por correo y responder siempre lo mismo. La contraseña se limita a 72 **bytes** en UTF-8, no a 72 caracteres, porque bcrypt ignora lo que excede de ese tamaño: con tildes, eñes o el símbolo €, que ocupan 2 o 3 bytes, una contraseña de 72 caracteres se truncaría sin aviso.
+- **Recuperación de contraseña.** El servidor genera un token aleatorio de 32 bytes, lo envía por correo dentro de un enlace al frontend y guarda en la base de datos **solo su hash SHA-256**, con caducidad a los 15 minutos. El token es de un solo uso: se borra al restablecer la contraseña. La solicitud responde siempre igual exista o no el email, y el envío no se espera (`await`) para que el tiempo de respuesta tampoco delate si la cuenta existe.
+- **CORS.** Si `FRONTEND_URL` está definida, la API solo acepta peticiones de ese origen; sin ella (desarrollo o demos) acepta cualquiera.
 - **Aritmética decimal exacta.** Los importes, precios y participaciones se almacenan como `NUMERIC` en PostgreSQL y se procesan en el servidor con la clase `Decimal` de Prisma (basada en `decimal.js`). Se evita así el error de representación de la coma flotante binaria. El redondeo se realiza únicamente al serializar la respuesta.
 - **Validación en el borde.** Cada ruta valida su entrada con un esquema Zod antes de ejecutar lógica alguna. Los errores de validación se devuelven con un formato uniforme (sección 3.1).
 - **Integridad ante concurrencia.** Al registrar una venta, el servidor bloquea la fila del usuario (`SELECT … FOR UPDATE`) dentro de una transacción de base de datos y reproduce el historial del fondo afectado. Esto impide que dos peticiones simultáneas vendan las mismas participaciones y que una operación con fecha pasada deje el historial incoherente.
 - **Modularidad.** Cada dominio (`auth`, `funds`, `transactions`, `portfolio`) agrupa sus rutas, esquemas de validación y tipos de datos. Los cálculos de negocio residen en funciones puras (`portfolio.calc`, `rebalance.service`), lo que permite probarlos sin base de datos.
-- **Cálculo del rebalanceo en dos lugares.** El servidor expone el cálculo por API (fuente de verdad documentada en esta memoria) y el cliente incorpora una implementación equivalente para ofrecer una vista previa inmediata mientras el usuario edita objetivos sin guardar. Ambas implementaciones están cubiertas por pruebas.
+- **Cálculo del rebalanceo en dos lugares.** El servidor expone el cálculo por API (fuente de verdad documentada en esta memoria) y el cliente incorpora una implementación equivalente para ofrecer una vista previa inmediata mientras el usuario edita objetivos sin guardar. Las compras que se ejecutan al confirmar un rebalanceo las calcula el cliente: reparte la aportación en céntimos enteros para que sumen exactamente lo aportado (sección 4.8), mientras que la API redondea cada importe por separado. Por eso pueden diferir en algún céntimo de lo que devuelve `GET /api/portfolio/rebalance`. Ambas implementaciones están cubiertas por pruebas.
+- **Precio de las operaciones.** La API acepta el `pricePerShare` que recibe y no lo contrasta con el valor liquidativo del fondo; es la SPA la que lo fija al valor liquidativo actual. Es una decisión deliberada: el contrato de la API ya admite el precio real de cada operación, de modo que la mejora descrita en la sección 5 solo requiere cambios en el cliente.
 - **Pruebas.** Se emplea Vitest en ambos proyectos. El backend se prueba con una base de datos simulada en memoria y el frontend con React Testing Library, simulando las respuestas de la API; ninguna prueba requiere servicios externos.
 
 ### 1.6 Integración de datos de mercado
@@ -166,12 +175,19 @@ erDiagram
     Fund ||--o{ Transaction : "es objeto de"
     User ||--o{ TargetAllocation : "define"
     Fund ||--o{ TargetAllocation : "es objetivo en"
+    User ||--o| ContributionPlan : "programa"
+    User ||--o{ ContributionRun : "registra"
 
     User {
         uuid id PK
         string email UK "único, en minúsculas"
         string passwordHash "bcrypt, coste 12"
         datetime createdAt "por defecto: now()"
+        string resetPasswordToken UK "opcional, hash SHA-256 del token de recuperación"
+        datetime resetPasswordExpires "opcional, caducidad del token"
+        boolean isEmailVerified "por defecto: false"
+        string emailVerificationToken UK "opcional, hash SHA-256 del token de activación"
+        datetime emailVerificationExpires "opcional, caducidad del token de activación"
     }
 
     Fund {
@@ -180,7 +196,7 @@ erDiagram
         string name
         string category "Renta Variable o Renta Fija"
         decimal currentNAV "NUMERIC(12,4)"
-        string ticker UK "símbolo en Yahoo Finance"
+        string ticker UK "opcional, símbolo en Yahoo Finance"
         datetime lastPriceUpdate "opcional, última sincronización de mercado"
     }
 
@@ -199,6 +215,26 @@ erDiagram
         uuid fundId PK, FK "Fund.id"
         decimal targetPercentage "NUMERIC(5,2)"
     }
+
+    ContributionPlan {
+        uuid userId PK, FK "User.id, borrado en cascada"
+        decimal amount "NUMERIC(12,2)"
+        enum frequency "MONTHLY, QUARTERLY, SEMIANNUAL o ANNUAL"
+        datetime startDate
+        datetime nextRunAt
+        boolean active
+    }
+
+    ContributionRun {
+        uuid id PK
+        uuid userId FK "User.id, borrado en cascada"
+        datetime scheduledFor "único junto con userId"
+        datetime executedAt
+        decimal amount "NUMERIC(12,2)"
+        enum status "SUCCESS o FAILED"
+        int purchases
+        string message "opcional"
+    }
 ```
 
 ### 2.2 Descripción de las entidades
@@ -211,6 +247,11 @@ erDiagram
 | `email` | Texto | Único | Correo electrónico, normalizado a minúsculas. |
 | `passwordHash` | Texto | — | Contraseña cifrada con bcrypt. |
 | `createdAt` | Fecha y hora | Por defecto `now()` | Fecha de alta. |
+| `resetPasswordToken` | Texto | Único; admite nulo | Hash SHA-256 del token de recuperación enviado por correo. Nunca se guarda el token en claro. Nulo si no hay una recuperación en curso. |
+| `resetPasswordExpires` | Fecha y hora | Admite nulo | Instante en que caduca el token (15 minutos tras la solicitud). |
+| `isEmailVerified` | Booleano | Por defecto `false` | Si el usuario ha confirmado su email. Sin confirmar no puede iniciar sesión. Las cuentas anteriores a la verificación se marcaron como verificadas al migrar. |
+| `emailVerificationToken` | Texto | Único; admite nulo | Hash SHA-256 del token de activación enviado por correo. Nulo una vez verificada la cuenta. |
+| `emailVerificationExpires` | Fecha y hora | Admite nulo | Instante en que caduca el token de activación (24 horas tras el registro o el reenvío). |
 
 **`Fund`**: fondo indexado del catálogo.
 
@@ -246,6 +287,30 @@ erDiagram
 | `fundId` | UUID | Clave primaria compuesta; clave foránea → `Fund` | Fondo. |
 | `targetPercentage` | `NUMERIC(5,2)` | — | Porcentaje objetivo (0-100, dos decimales). |
 
+**`ContributionPlan`**: aportación periódica automática de un usuario (como máximo una).
+
+| Campo | Tipo | Restricciones | Descripción |
+|---|---|---|---|
+| `userId` | UUID | Clave primaria; clave foránea → `User`; borrado en cascada | Usuario. |
+| `amount` | `NUMERIC(12,2)` | — | Importe de cada aportación, en €. |
+| `frequency` | Enumerado | `MONTHLY`, `QUARTERLY`, `SEMIANNUAL` o `ANNUAL` | Periodicidad (1, 3, 6 o 12 meses). |
+| `startDate` | Fecha y hora | — | Primera aportación; fija el día del mes de las siguientes. |
+| `nextRunAt` | Fecha y hora | Índice `(active, nextRunAt)` | Próxima ejecución pendiente. |
+| `active` | Booleano | Por defecto `true` | Si está en pausa no se ejecuta. |
+
+**`ContributionRun`**: cada aportación automática ejecutada o fallida.
+
+| Campo | Tipo | Restricciones | Descripción |
+|---|---|---|---|
+| `id` | UUID | Clave primaria | Identificador. |
+| `userId` | UUID | Clave foránea → `User`; borrado en cascada | Usuario. |
+| `scheduledFor` | Fecha y hora | Único junto con `userId` | Fecha programada. La restricción impide ejecutar dos veces la misma aportación. |
+| `executedAt` | Fecha y hora | — | Momento real de la ejecución. |
+| `amount` | `NUMERIC(12,2)` | — | Importe aportado. |
+| `status` | Enumerado | `SUCCESS` o `FAILED` | Resultado. |
+| `purchases` | Entero | — | Compras creadas. |
+| `message` | Texto | Admite nulo | Motivo del fallo. |
+
 ### 2.3 Cardinalidades y reglas de integridad
 
 - Un **usuario** puede tener muchas **transacciones** y muchos **objetivos**; cada transacción y cada objetivo pertenecen a un único usuario (relaciones 1:N).
@@ -270,6 +335,7 @@ erDiagram
 | Aspecto | Descripción |
 |---|---|
 | **URL base** | `http://localhost:3001` en desarrollo. Todas las rutas cuelgan de `/api`. |
+| **CORS** | Con `FRONTEND_URL` definida solo se acepta ese origen; sin ella, cualquiera (solo desarrollo). |
 | **Formato** | JSON (`Content-Type: application/json`) en peticiones y respuestas. |
 | **Autenticación** | Las rutas protegidas exigen la cabecera `Authorization: Bearer <JWT>`, con el token obtenido en el registro o el inicio de sesión. |
 | **Decimales** | En la entrada se usa el punto como separador decimal. Los importes pueden enviarse como `number` o como cadena numérica; en ambos casos se validan igual. |
@@ -299,14 +365,23 @@ erDiagram
 | `GET` | `/api/health` | No | Comprobación de disponibilidad. |
 | `POST` | `/api/auth/register` | No | Alta de usuario. |
 | `POST` | `/api/auth/login` | No | Inicio de sesión. |
+| `POST` | `/api/auth/verify-email` | No | Activa la cuenta con el token recibido por correo. |
+| `POST` | `/api/auth/resend-verification` | No | Envía un nuevo enlace de activación. |
+| `POST` | `/api/auth/forgot-password` | No | Solicita el enlace de recuperación de contraseña por correo. |
+| `POST` | `/api/auth/reset-password` | No | Establece una nueva contraseña con el token recibido. |
 | `GET` | `/api/auth/me` | Sí | Datos del usuario autenticado. |
 | `GET` | `/api/funds` | Sí | Catálogo de fondos (refresca los precios caducados). |
 | `POST` | `/api/funds/sync-prices` | Sí | Fuerza la actualización de los precios de mercado de todo el catálogo. |
 | `GET` | `/api/transactions` | Sí | Historial de operaciones del usuario. |
 | `POST` | `/api/transactions` | Sí | Registro de una compra o venta. |
 | `GET` | `/api/portfolio` | Sí | Resumen valorado de la cartera. |
+| `GET` | `/api/portfolio/history` | Sí | Evolución del capital invertido y del valor de mercado. |
 | `POST` | `/api/portfolio/targets` | Sí | Definición de los porcentajes objetivo. |
 | `GET` | `/api/portfolio/rebalance` | Sí | Cálculo de rebalanceo por aportación. |
+| `GET` | `/api/contributions` | Sí | Aportación automática y sus últimas ejecuciones. |
+| `PUT` | `/api/contributions` | Sí | Crea, modifica, pausa o reanuda la aportación automática. |
+| `DELETE` | `/api/contributions` | Sí | Elimina la aportación automática. |
+| `POST` | `/api/cron/contributions/run-due` | Secreto | Ejecuta las aportaciones vencidas de todos los usuarios (cron externo). |
 
 ### 3.2 Comprobación de estado
 
@@ -329,23 +404,17 @@ erDiagram
 | Campo | Tipo | Reglas |
 |---|---|---|
 | `email` | string | Formato de email, máximo 254 caracteres. Se normaliza a minúsculas. |
-| `password` | string | De 8 a 72 caracteres, con al menos una letra y un número. |
+| `password` | string | Al menos 8 caracteres y como máximo 72 bytes en UTF-8 (límite de bcrypt, sección 1.5), con al menos una mayúscula, un número y un carácter especial (cualquiera que no sea letra ni dígito). |
 
 ```json
 { "email": "usuario@test.com", "password": "Password123!" }
 ```
 
+- **Comportamiento:** crea la cuenta **sin verificar** y no inicia sesión. Genera un token aleatorio (`randomBytes(32)`), guarda su hash SHA-256 con una caducidad de 24 horas y envía por correo un enlace `{FRONTEND_URL}/verify-email?token=…`. Como en la recuperación de contraseña, el envío no se espera: un fallo de SMTP se registra en el log (y el usuario puede pedir otro enlace con `resend-verification`).
 - **Respuesta `201 Created`:**
 
 ```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "832c2b08-112f-499d-b7d7-e81f4c67a84a",
-    "email": "usuario@test.com",
-    "createdAt": "2026-10-02T09:19:26.417Z"
-  }
-}
+{ "message": "Te hemos enviado un email a usuario@test.com para activar tu cuenta. El enlace caduca en 24 horas." }
 ```
 
 - **Errores:**
@@ -364,13 +433,86 @@ erDiagram
 { "email": "usuario@test.com", "password": "Password123!" }
 ```
 
-- **Respuesta `200 OK`:** misma estructura que el registro (`token` y `user`).
+- **Respuesta `200 OK`:**
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "832c2b08-112f-499d-b7d7-e81f4c67a84a",
+    "email": "usuario@test.com",
+    "createdAt": "2026-10-02T09:19:26.417Z"
+  }
+}
+```
+
 - **Errores:**
 
 | Código | Causa |
 |---|---|
 | `400` | Datos no válidos. |
 | `401` | `{ "error": "Credenciales incorrectas" }`: idéntico para email inexistente y contraseña errónea. |
+| `403` | Credenciales correctas pero email sin verificar: `{ "error": "Debes verificar tu email antes de iniciar sesión. Revisa tu bandeja de entrada o solicita un nuevo enlace de activación." }`. Solo se comprueba tras validar la contraseña, para no revelar el estado de una cuenta a quien no la conoce. |
+
+#### `POST /api/auth/verify-email`: activación de la cuenta
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:** `token` (string, el recibido por correo; obligatorio, máximo 256 caracteres).
+
+```json
+{ "token": "9f2c…" }
+```
+
+- **Respuesta `200 OK`:** `{ "message": "Email verificado. Ya puedes iniciar sesión." }`. La cuenta queda verificada y el token se borra, por lo que es de un solo uso.
+- **Errores:**
+
+| Código | Causa |
+|---|---|
+| `400` | Datos no válidos, o `{ "error": "El enlace de activación no es válido o ya se ha usado" }`. |
+| `410` | `{ "error": "El enlace de activación ha caducado. Solicita uno nuevo." }`. Un código propio permite al cliente ofrecer el reenvío. |
+
+#### `POST /api/auth/resend-verification`: nuevo enlace de activación
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:** `email` (string, mismas reglas que en el registro).
+- **Comportamiento:** si el email pertenece a una cuenta sin verificar, genera un token nuevo (el anterior deja de valer) con otras 24 horas de validez y lo envía por correo.
+- **Respuesta `200 OK`:** idéntica exista o no la cuenta, y esté o no verificada, para impedir la enumeración: `{ "message": "Si hay una cuenta pendiente de verificar con ese email, recibirás un nuevo enlace de activación" }`.
+- **Errores:** `400` si el email no es válido.
+
+#### `POST /api/auth/forgot-password`: solicitud de recuperación
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:** `email` (string, mismas reglas que en el registro).
+
+```json
+{ "email": "usuario@test.com" }
+```
+
+- **Comportamiento:** si el email pertenece a un usuario, se genera un token aleatorio, se guarda su hash con una caducidad de 15 minutos y se envía por correo un enlace `{FRONTEND_URL}/reset-password?token=…`. El envío no se espera: un fallo de SMTP se registra en el log pero no cambia la respuesta.
+- **Respuesta `200 OK`:** idéntica exista o no el email, para impedir la enumeración de cuentas.
+
+```json
+{ "message": "Si el email existe en nuestro sistema, recibirás un enlace de recuperación" }
+```
+
+- **Errores:** `400` si el email no es válido.
+
+#### `POST /api/auth/reset-password`: nueva contraseña
+
+- **Cabeceras:** `Content-Type: application/json`.
+- **Entrada:**
+
+| Campo | Tipo | Reglas |
+|---|---|---|
+| `token` | string | El recibido por correo; obligatorio, máximo 256 caracteres. |
+| `newPassword` | string | Misma política que en el registro (al menos 8 caracteres, como máximo 72 bytes, mayúscula, número y carácter especial). |
+
+- **Respuesta `200 OK`:** `{ "message": "Contraseña actualizada correctamente" }`. El token queda invalidado. Como el enlace llegó al buzón del usuario, la cuenta queda además verificada si no lo estaba.
+- **Errores:**
+
+| Código | Causa |
+|---|---|
+| `400` | Datos no válidos (por ejemplo, contraseña débil: en ese caso el token **no** se consume), o `{ "error": "El enlace no es válido o ha caducado" }` si el token no existe, ya se usó o está caducado. |
 
 #### `GET /api/auth/me`: usuario autenticado
 
@@ -402,18 +544,18 @@ erDiagram
     "isin": "IE00B4L5Y983",
     "name": "iShares Core MSCI World UCITS ETF USD Acc",
     "category": "Renta Variable",
-    "currentNAV": 130.47,
+    "currentNAV": 130.38,
     "ticker": "EUNL.DE",
-    "lastPriceUpdate": "2026-10-02T13:18:15.826Z"
+    "lastPriceUpdate": "2026-10-02T08:55:12.000Z"
   },
   {
     "id": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
     "isin": "IE00BK5BQT80",
     "name": "Vanguard FTSE All-World UCITS ETF USD Acc",
     "category": "Renta Variable",
-    "currentNAV": 171.72,
+    "currentNAV": 171.6,
     "ticker": "VWCE.DE",
-    "lastPriceUpdate": "2026-10-02T13:18:15.826Z"
+    "lastPriceUpdate": "2026-10-02T08:55:12.000Z"
   }
 ]
 ```
@@ -425,7 +567,7 @@ erDiagram
 
 #### `POST /api/funds/sync-prices`: actualización manual de precios
 
-Fuerza la consulta al proveedor de datos de mercado de **todos** los fondos con ticker, ignorando la vigencia de la caché y el periodo de espera por fallos. El catálogo es común a todos los usuarios, por lo que la actualización afecta a todos.
+Recorre **todos** los fondos de la base de datos y consulta al proveedor de datos de mercado los que tienen ticker, ignorando la vigencia de la caché y el periodo de espera por fallos. Los registros heredados sin ticker, si los hubiera, se omiten. El catálogo es común a todos los usuarios, por lo que la actualización afecta a todos.
 
 - **Cabeceras:** `Authorization: Bearer <JWT>`. No requiere cuerpo; si el cliente envía uno (con cualquier `Content-Type`), se ignora.
 - **Respuesta `200 OK`:** resumen de la sincronización, con el detalle por fondo. Se responde `200` aunque algunos o todos los fondos fallen: el fallo del proveedor es información del resultado, no un error de la petición.
@@ -436,21 +578,21 @@ Fuerza la consulta al proveedor de datos de mercado de **todos** los fondos con 
   "updated": 11,
   "failed": 0,
   "skipped": 0,
-  "syncedAt": "2026-10-02T13:19:23.588Z",
+  "syncedAt": "2026-10-02T08:55:12.000Z",
   "results": [
     {
       "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
       "isin": "IE00B4L5Y983",
       "ticker": "EUNL.DE",
       "status": "updated",
-      "price": 130.5
+      "price": 130.38
     },
     {
       "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
       "isin": "IE00BK5BQT80",
       "ticker": "VWCE.DE",
       "status": "updated",
-      "price": 171.72
+      "price": 171.6
     }
   ]
 }
@@ -458,12 +600,14 @@ Fuerza la consulta al proveedor de datos de mercado de **todos** los fondos con 
 
 | Campo | Significado |
 |---|---|
-| `total` | Fondos considerados. |
-| `updated`, `failed`, `skipped` | Fondos actualizados, con error y omitidos (por no tener ticker, tener un precio vigente o estar en periodo de espera). |
+| `total` | Fondos de la base de datos, con o sin ticker. |
+| `updated`, `failed`, `skipped` | Fondos actualizados, con error y omitidos. |
 | `results[].status` | `updated`, `failed` o `skipped`. |
 | `results[].price` | Nuevo valor liquidativo (solo si `updated`). |
-| `results[].reason` | Si `failed`: `http` (el proveedor respondió con error, por ejemplo 429), `timeout`, `network`, `invalid` (respuesta sin un precio válido), `currency` (divisa distinta del euro) o `database`. Si `skipped`: `no-ticker`, `fresh` o `cooldown` (estos dos últimos solo en el refresco automático). |
+| `results[].reason` | Si `failed`: `http` (el proveedor respondió con error, por ejemplo 429), `timeout`, `network`, `invalid` (respuesta sin un precio válido), `currency` (divisa distinta del euro) o `database`. Si `skipped`: `no-ticker` (registro heredado sin cotización). |
 | `results[].detail` | Descripción del fallo, si lo hubo. |
+
+El mismo servicio ejecuta el refresco automático (sección 1.6), que además omite fondos con los motivos `fresh` (precio vigente) y `cooldown` (periodo de espera tras un fallo). Este endpoint fuerza la consulta, por lo que esos dos motivos no aparecen en su respuesta.
 
 Cuando hay fallos, la base de datos conserva la última cotización de esos fondos. Ejemplo con el proveedor inaccesible: `{ "total": 11, "updated": 0, "failed": 11, "skipped": 0, … }`, con `status: "failed"` y `reason: "timeout"` en los fondos afectados.
 
@@ -477,20 +621,31 @@ Cuando hay fallos, la base de datos conserva la última cotización de esos fond
 #### `GET /api/transactions`: historial del usuario
 
 - **Cabeceras:** `Authorization: Bearer <JWT>`.
-- **Respuesta `200 OK`:** operaciones del usuario autenticado, de la más reciente a la más antigua.
+- **Respuesta `200 OK`:** operaciones del usuario autenticado, de la más reciente a la más antigua. El ejemplo muestra las dos más recientes de las siete de la cartera de demostración.
 
 ```json
 [
   {
     "id": "dcc3b3cd-0c4a-4ab8-806a-a08ff7f93e3b",
-    "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
-    "isin": "IE00B03HD191",
-    "fundName": "Vanguard Global Stock Index Fund EUR Acc",
+    "fundId": "e3a9f6d2-8c41-4b7e-9f05-c2d8a1b6e573",
+    "isin": "IE00BG47KB92",
+    "fundName": "Vanguard Global Aggregate Bond UCITS ETF EUR Hedged Acc",
+    "type": "SELL",
+    "shares": 20,
+    "pricePerShare": 23,
+    "total": 460,
+    "transactionDate": "2026-09-02T09:00:00.000Z"
+  },
+  {
+    "id": "61f0a8e2-4c7d-4b95-8e3a-d2b9c5f17a04",
+    "fundId": "9d4b2e7f-1a6c-4f38-b0e2-5c7a9d3f1e86",
+    "isin": "IE00B4WXJJ64",
+    "fundName": "iShares Core Euro Government Bond UCITS ETF EUR Dist",
     "type": "BUY",
-    "shares": 2.5,
-    "pricePerShare": 512.34,
-    "total": 1280.85,
-    "transactionDate": "2026-09-27T09:15:00.000Z"
+    "shares": 12,
+    "pricePerShare": 103,
+    "total": 1236,
+    "transactionDate": "2026-08-03T09:00:00.000Z"
   }
 ]
 ```
@@ -510,29 +665,35 @@ Cuando hay fallos, la base de datos conserva la última cotización de esos fond
 | `pricePerShare` | number o string | Mayor que 0; hasta 8 dígitos enteros y 4 decimales. |
 | `transactionDate` | string (ISO 8601) | Opcional; por defecto, el instante actual. No puede ser futura. |
 
+La API no contrasta `pricePerShare` con el valor liquidativo del fondo. Es una decisión deliberada: el contrato admite el precio real de la operación, aunque la SPA lo fija hoy al valor liquidativo actual (véanse las secciones 1.5 y 5).
+
+Ejemplo: la venta que aparece en primer lugar en el historial anterior.
+
 ```json
 {
-  "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
-  "type": "BUY",
-  "shares": 2.5,
-  "pricePerShare": 512.34
+  "fundId": "e3a9f6d2-8c41-4b7e-9f05-c2d8a1b6e573",
+  "type": "SELL",
+  "shares": 20,
+  "pricePerShare": 23,
+  "transactionDate": "2026-09-02T09:00:00.000Z"
 }
 ```
 
-- **Respuesta `201 Created`:** la operación creada, con la misma estructura que un elemento de `GET /api/transactions`.
+- **Respuesta `201 Created`:** la operación creada, con la misma estructura que un elemento de `GET /api/transactions` (en este caso, el primero del ejemplo anterior).
 - **Errores:**
 
 | Código | Causa |
 |---|---|
 | `400` | Datos no válidos (fecha futura, más de 4 decimales, UUID mal formado…). |
 | `404` | `{ "error": "Fondo no encontrado" }` |
-| `422` | La venta excede las participaciones disponibles en esa fecha: |
+| `422` | `{ "error": "Este fondo no cotiza en bolsa y no está disponible para nuevas compras" }`: compra de un fondo sin ticker. |
+| `422` | La venta excede las participaciones disponibles en esa fecha. Por ejemplo, vender 200 participaciones del fondo de renta fija agregada cuando se poseen 130: |
 
 ```json
 {
   "error": "No tienes participaciones suficientes para esta venta",
   "details": [
-    { "field": "shares", "message": "Disponibles a 2026-10-02T09:26:33.787Z: 2; solicitadas: 5" }
+    { "field": "shares", "message": "Disponibles a 2026-10-02T09:00:00.000Z: 130; solicitadas: 200" }
   ]
 }
 ```
@@ -542,44 +703,70 @@ Cuando hay fallos, la base de datos conserva la última cotización de esos fond
 #### `GET /api/portfolio`: resumen valorado
 
 - **Cabeceras:** `Authorization: Bearer <JWT>`.
-- **Respuesta `200 OK`:** importes en euros con 2 decimales, participaciones y precios con hasta 4, porcentajes con 2.
+- **Comportamiento:** como `GET /api/funds`, antes de responder refresca los precios de mercado caducados (sección 1.6); si el proveedor falla, valora la cartera con la última cotización guardada.
+- **Respuesta `200 OK`:** importes en euros con 2 decimales, participaciones y precios con hasta 4, porcentajes con 2. Las posiciones se ordenan de mayor a menor valor y los objetivos, de mayor a menor porcentaje. El ejemplo corresponde a la cartera de demostración y muestra solo 2 de sus 5 posiciones y objetivos; los totales sí corresponden a la cartera completa (compárese con la tabla de la sección 4.7).
 
 ```json
 {
-  "totalValue": 3475.68,
-  "totalInvested": 3413.33,
-  "pnl": 62.35,
-  "pnlPercentage": 1.83,
-  "realizedPnl": 23.33,
+  "totalValue": 19535.86,
+  "totalInvested": 17512,
+  "pnl": 2023.86,
+  "pnlPercentage": 11.56,
+  "realizedPnl": 12,
   "positions": [
+    {
+      "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
+      "isin": "IE00B4L5Y983",
+      "name": "iShares Core MSCI World UCITS ETF USD Acc",
+      "category": "Renta Variable",
+      "shares": 60,
+      "averageBuyPrice": 114.6667,
+      "currentNAV": 130.38,
+      "lastPriceUpdate": "2026-10-02T08:55:12.000Z",
+      "currentValue": 7822.8,
+      "invested": 6880,
+      "pnl": 942.8,
+      "pnlPercentage": 13.7,
+      "portfolioPercentage": 40.04,
+      "targetPercentage": 40
+    },
     {
       "fundId": "4eb9e25b-998b-468f-91de-d8869293a498",
       "isin": "IE00B5BMR087",
       "name": "iShares Core S&P 500 UCITS ETF USD Acc",
       "category": "Renta Variable",
-      "shares": 4,
-      "averageBuyPrice": 600,
-      "currentNAV": 612.75,
-      "lastPriceUpdate": "2026-10-02T13:18:15.826Z",
-      "currentValue": 2451,
-      "invested": 2400,
-      "pnl": 51,
-      "pnlPercentage": 2.13,
-      "portfolioPercentage": 70.52,
-      "targetPercentage": null
+      "shares": 8,
+      "averageBuyPrice": 640,
+      "currentNAV": 741.58,
+      "lastPriceUpdate": "2026-10-02T08:55:12.000Z",
+      "currentValue": 5932.64,
+      "invested": 5120,
+      "pnl": 812.64,
+      "pnlPercentage": 15.87,
+      "portfolioPercentage": 30.37,
+      "targetPercentage": 20
     }
   ],
   "targets": [
     {
+      "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
+      "isin": "IE00B4L5Y983",
+      "name": "iShares Core MSCI World UCITS ETF USD Acc",
+      "targetPercentage": 40,
+      "currentPercentage": 40.04
+    },
+    {
       "fundId": "4eb9e25b-998b-468f-91de-d8869293a498",
       "isin": "IE00B5BMR087",
       "name": "iShares Core S&P 500 UCITS ETF USD Acc",
-      "targetPercentage": 66.67,
-      "currentPercentage": 70.52
+      "targetPercentage": 20,
+      "currentPercentage": 30.37
     }
   ]
 }
 ```
+
+El MSCI World se compró en dos veces (40 participaciones a 112 € y 20 a 120 €), de ahí su coste medio de 114,6667 €. El `realizedPnl` de 12 € procede de la venta de 20 participaciones del fondo de renta fija agregada a 23 €, compradas a 22,40 €: 20 × (23 − 22,40) = 12 €.
 
 | Campo | Significado |
 |---|---|
@@ -594,6 +781,28 @@ Cuando hay fallos, la base de datos conserva la última cotización de esos fond
 | `targets` | Objetivos definidos, incluidos los de fondos sin posición (con `currentPercentage` igual a 0). |
 
 Las fórmulas se desarrollan en la sección 4.6.
+
+#### `GET /api/portfolio/history`: evolución del patrimonio
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`.
+- **Comportamiento:** refresca los precios caducados igual que `GET /api/portfolio` y devuelve una serie en orden cronológico, desde el día anterior a la primera operación (con 0 €, para que la gráfica no empiece cortada) hasta hoy. Hay un punto por día; si la serie supera los 400 días, uno por semana, conservando siempre los días con operaciones y el último. Sin operaciones devuelve `[]`.
+- **Respuesta `200 OK`:**
+
+```json
+[
+  { "date": "2026-09-30", "invested": 0, "currentValue": 0 },
+  { "date": "2026-10-01", "invested": 1000, "currentValue": 1000 },
+  { "date": "2026-10-02", "invested": 1000, "currentValue": 1050 }
+]
+```
+
+| Campo | Significado |
+|---|---|
+| `date` | Día (`YYYY-MM-DD`, UTC). |
+| `invested` | Coste de adquisición de las posiciones abiertas ese día (coste medio, igual que `totalInvested`). |
+| `currentValue` | Participaciones que se tenían ese día × precio estimado del fondo ese día. |
+
+**Precio estimado.** La aplicación no guarda un histórico de valores liquidativos, solo el último. Por eso el precio de cada fondo en cada día se obtiene por **interpolación lineal** entre los precios conocidos: el de cada operación de ese fondo y el NAV actual (situado en el día de hoy). Así el último punto coincide con `totalValue` y `totalInvested` de `GET /api/portfolio`, pero los valores intermedios son una aproximación y no reflejan la volatilidad real del mercado entre operaciones.
 
 #### `POST /api/portfolio/targets`: definición de objetivos
 
@@ -610,33 +819,29 @@ Sustituye **por completo** los objetivos del usuario.
 
 La suma de los porcentajes debe ser **exactamente 100** (salvo en la lista vacía).
 
+Ejemplo: el reparto objetivo de la cartera de demostración.
+
 ```json
 {
   "targets": [
-    { "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf", "targetPercentage": 33.33 },
-    { "fundId": "4eb9e25b-998b-468f-91de-d8869293a498", "targetPercentage": 66.67 }
+    { "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21", "targetPercentage": 40 },
+    { "fundId": "4eb9e25b-998b-468f-91de-d8869293a498", "targetPercentage": 20 },
+    { "fundId": "e3a9f6d2-8c41-4b7e-9f05-c2d8a1b6e573", "targetPercentage": 20 },
+    { "fundId": "b1e7c3a0-6d2f-4e8b-a5c9-3f0d7e2b9c14", "targetPercentage": 10 },
+    { "fundId": "9d4b2e7f-1a6c-4f38-b0e2-5c7a9d3f1e86", "targetPercentage": 10 }
   ]
 }
 ```
 
-- **Respuesta `200 OK`:** los objetivos guardados, ordenados de mayor a menor porcentaje.
+- **Respuesta `200 OK`:** los objetivos guardados, ordenados de mayor a menor porcentaje, con el peso actual de cada fondo.
 
 ```json
 [
-  {
-    "fundId": "4eb9e25b-998b-468f-91de-d8869293a498",
-    "isin": "IE00B5BMR087",
-    "name": "iShares Core S&P 500 UCITS ETF USD Acc",
-    "targetPercentage": 66.67,
-    "currentPercentage": 70.52
-  },
-  {
-    "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
-    "isin": "IE00B03HD191",
-    "name": "Vanguard Global Stock Index Fund EUR Acc",
-    "targetPercentage": 33.33,
-    "currentPercentage": 29.48
-  }
+  { "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21", "isin": "IE00B4L5Y983", "name": "iShares Core MSCI World UCITS ETF USD Acc", "targetPercentage": 40, "currentPercentage": 40.04 },
+  { "fundId": "4eb9e25b-998b-468f-91de-d8869293a498", "isin": "IE00B5BMR087", "name": "iShares Core S&P 500 UCITS ETF USD Acc", "targetPercentage": 20, "currentPercentage": 30.37 },
+  { "fundId": "e3a9f6d2-8c41-4b7e-9f05-c2d8a1b6e573", "isin": "IE00BG47KB92", "name": "Vanguard Global Aggregate Bond UCITS ETF EUR Hedged Acc", "targetPercentage": 20, "currentPercentage": 15.36 },
+  { "fundId": "b1e7c3a0-6d2f-4e8b-a5c9-3f0d7e2b9c14", "isin": "IE00BKM4GZ66", "name": "iShares Core MSCI EM IMI UCITS ETF USD Acc", "targetPercentage": 10, "currentPercentage": 7.82 },
+  { "fundId": "9d4b2e7f-1a6c-4f38-b0e2-5c7a9d3f1e86", "isin": "IE00B4WXJJ64", "name": "iShares Core Euro Government Bond UCITS ETF EUR Dist", "targetPercentage": 10, "currentPercentage": 6.41 }
 ]
 ```
 
@@ -668,33 +873,64 @@ La suma de los porcentajes debe ser **exactamente 100** (salvo en la lista vací
 
 Ejemplo: `GET /api/portfolio/rebalance?newContribution=1000`
 
-- **Respuesta `200 OK`:** una fila por fondo, ordenadas de mayor a menor aportación sugerida.
+- **Comportamiento:** como `GET /api/portfolio`, refresca antes los precios caducados (sección 1.6) y, si el proveedor falla, calcula con la última cotización guardada.
+- **Respuesta `200 OK`:** una fila por fondo, ordenadas de mayor a menor aportación sugerida. El ejemplo corresponde a la cartera de demostración y reproduce el cálculo de la sección 4.7.
 
 ```json
 {
-  "totalValue": 3475.68,
+  "totalValue": 19535.86,
   "newContribution": 1000,
-  "targetTotal": 4475.68,
+  "targetTotal": 20535.86,
   "items": [
     {
-      "fundId": "5902db3e-1a26-4c36-91ed-6190c92f3dbf",
-      "isin": "IE00B03HD191",
-      "name": "Vanguard Global Stock Index Fund EUR Acc",
-      "currentPercentage": 29.48,
+      "fundId": "e3a9f6d2-8c41-4b7e-9f05-c2d8a1b6e573",
+      "isin": "IE00BG47KB92",
+      "name": "Vanguard Global Aggregate Bond UCITS ETF EUR Hedged Acc",
+      "currentPercentage": 15.36,
+      "targetPercentage": 20,
+      "currentValue": 3000.53,
+      "targetValue": 4107.17,
+      "affordableContribution": 391.67
+    },
+    {
+      "fundId": "9d4b2e7f-1a6c-4f38-b0e2-5c7a9d3f1e86",
+      "isin": "IE00B4WXJJ64",
+      "name": "iShares Core Euro Government Bond UCITS ETF EUR Dist",
+      "currentPercentage": 6.41,
+      "targetPercentage": 10,
+      "currentValue": 1252.98,
+      "targetValue": 2053.59,
+      "affordableContribution": 283.35
+    },
+    {
+      "fundId": "b1e7c3a0-6d2f-4e8b-a5c9-3f0d7e2b9c14",
+      "isin": "IE00BKM4GZ66",
+      "name": "iShares Core MSCI EM IMI UCITS ETF USD Acc",
+      "currentPercentage": 7.82,
+      "targetPercentage": 10,
+      "currentValue": 1526.91,
+      "targetValue": 2053.59,
+      "affordableContribution": 186.4
+    },
+    {
+      "fundId": "7c2d9a54-3f6e-4a1b-9d58-0b6e1f4c8a21",
+      "isin": "IE00B4L5Y983",
+      "name": "iShares Core MSCI World UCITS ETF USD Acc",
+      "currentPercentage": 40.04,
       "targetPercentage": 40,
-      "currentValue": 1024.68,
-      "targetValue": 1790.27,
-      "affordableContribution": 765.59
+      "currentValue": 7822.8,
+      "targetValue": 8214.34,
+      "affordableContribution": 138.58
     },
     {
       "fundId": "4eb9e25b-998b-468f-91de-d8869293a498",
       "isin": "IE00B5BMR087",
       "name": "iShares Core S&P 500 UCITS ETF USD Acc",
-      "currentPercentage": 70.52,
-      "targetPercentage": 60,
-      "currentValue": 2451,
-      "targetValue": 2685.41,
-      "affordableContribution": 234.41
+      "currentPercentage": 30.37,
+      "targetPercentage": 20,
+      "currentValue": 5932.64,
+      "targetValue": 4107.17,
+      "affordableContribution": 0
     }
   ]
 }
@@ -719,6 +955,69 @@ Un fondo con posición pero sin objetivo se trata como objetivo 0 %; un fondo co
 |---|---|
 | `400` | `newContribution` no es un importe válido. |
 | `422` | `{ "error": "Define primero tus porcentajes objetivo (POST /api/portfolio/targets)" }` |
+
+### 3.7 Aportaciones automáticas
+
+Cada usuario puede programar una aportación periódica. En cada fecha se reparte con el mismo algoritmo de rebalanceo (sección 4), usando los objetivos **guardados en ese momento**, y se registran las compras resultantes como transacciones `BUY`. Es un registro en la aplicación: no mueve dinero real.
+
+**Calendario.** Las fechas se calculan desde `startDate`: `startDate + k × periodo` (1, 3, 6 o 12 meses). Si el mes destino no tiene ese día, se usa el último (un plan del día 31 cae el 28 o 29 de febrero y vuelve al 31 en marzo).
+
+**Ejecución.** Una aportación vencida se ejecuta en una transacción de base de datos que bloquea la fila del usuario, igual que `POST /api/transactions`:
+
+1. Calcula el rebalanceo de `amount` con los objetivos guardados.
+2. Solo compra fondos que cotizan. Lo que corresponda a un fondo sin cotización se reparte entre los demás, en céntimos enteros, para que las compras sumen exactamente `amount`.
+3. Crea las compras al **precio actual** y con la **fecha real de ejecución**: si se ejecuta con retraso no se inventa un precio del pasado.
+4. Registra un `ContributionRun` (único por usuario y fecha programada) y avanza `nextRunAt` a la siguiente fecha. Si falla (por ejemplo, porque no hay objetivos), se registra como `FAILED` con su motivo y también se avanza, para no reintentar sin fin.
+
+Si se han acumulado varias fechas, cada una se ejecuta una vez (con un máximo de 24 por pasada).
+
+**Disparadores.** El backend gratuito de Render se suspende tras unos minutos sin tráfico, de modo que un temporizador no basta. La misma función se invoca desde tres sitios, y el bloqueo y la restricción única impiden duplicados:
+
+- un **temporizador** del proceso, al arrancar y cada `CONTRIBUTIONS_CHECK_MINUTES` (15 por defecto; `0` lo desactiva);
+- la **puesta al día al usar la app**: antes de responder a `/api/portfolio…`, `/api/transactions` y `/api/contributions` se ejecutan las aportaciones vencidas del usuario, así que el Dashboard nunca muestra una cartera sin ellas;
+- un **cron externo** (anexo A.8), que llama a `POST /api/cron/contributions/run-due` para despertar el servidor el día que toca.
+
+#### `GET /api/contributions`
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`.
+- **Respuesta `200 OK`:** el plan (o `null`) y las 12 últimas ejecuciones, de la más reciente a la más antigua.
+
+```json
+{
+  "plan": { "amount": 300, "frequency": "MONTHLY", "startDate": "2026-10-15", "active": true, "nextRunAt": "2026-11-15" },
+  "runs": [
+    { "id": "…", "scheduledFor": "2026-10-15", "executedAt": "2026-10-15T00:04:12.000Z", "amount": 300, "status": "SUCCESS", "purchases": 2, "message": null }
+  ]
+}
+```
+
+`nextRunAt` es `null` si el plan está en pausa.
+
+#### `PUT /api/contributions`
+
+Crea o sustituye el plan del usuario. También sirve para pausarlo (`active: false`) o reanudarlo.
+
+- **Cabeceras:** `Authorization: Bearer <JWT>`, `Content-Type: application/json`.
+- **Entrada:**
+
+| Campo | Tipo | Reglas |
+|---|---|---|
+| `amount` | number o string | Al menos 1 €, hasta 2 decimales. |
+| `frequency` | string | `MONTHLY`, `QUARTERLY`, `SEMIANNUAL` o `ANNUAL`. |
+| `startDate` | string | Fecha `YYYY-MM-DD`. |
+| `active` | boolean | Opcional; `true` por defecto. |
+
+- **Comportamiento:** `nextRunAt` es la primera fecha del calendario desde hoy que aún no se haya ejecutado. Guardar o reanudar un plan **nunca** pone al día periodos pasados. Si esa fecha es hoy, la aportación se ejecuta antes de responder.
+- **Respuesta `200 OK`:** misma estructura que `GET`.
+- **Errores:** `400` (datos no válidos, con `details`); `422` si se activa sin objetivos guardados.
+
+#### `DELETE /api/contributions`
+
+Elimina el plan; las ejecuciones ya registradas y sus compras se conservan. Responde `204 No Content`.
+
+#### `POST /api/cron/contributions/run-due`
+
+Solo existe si se define `CRON_SECRET`, y exige la cabecera `Authorization: Bearer <CRON_SECRET>` (comparada en tiempo constante); si no coincide, responde `401`. Ejecuta las aportaciones vencidas de todos los usuarios y responde con un resumen: `{ "executed": 3, "failed": 0, "users": 2 }`.
 
 ---
 
@@ -879,17 +1178,18 @@ Observaciones:
 ## 5. Limitaciones y trabajo futuro
 
 - **Datos de mercado.** El catálogo se limita a ETF con cotización en bolsa, únicos para los que existe un precio en tiempo real accesible. La API pública de Yahoo Finance no es oficial: puede cambiar o limitar el acceso sin previo aviso (de ahí la estrategia de recuperación de la sección 1.6) y devuelve el precio de cotización en bolsa, que puede diferir ligeramente del valor liquidativo oficial. Los fondos de inversión tradicionales, que se valoran una vez al día fuera de bolsa, quedan fuera del alcance. Una evolución natural es emplear un proveedor con contrato de servicio que permita ampliar la cobertura.
-- **Precio de las operaciones.** El formulario registra las operaciones al valor liquidativo actual. Permitir indicar el precio real permitiría una valoración histórica precisa del coste medio.
+- **Precio de las operaciones.** El formulario registra las operaciones al valor liquidativo actual, aunque la fecha sea pasada. La API ya admite el precio real (sección 1.5); exponerlo en el formulario permitiría una valoración histórica precisa del coste medio.
 - **Rebalanceo con ventas.** El algoritmo se limita deliberadamente al rebalanceo por aportación. Un modo alternativo podría proponer ventas cuando la desviación supere un umbral, teniendo en cuenta su coste fiscal.
 - **Historial de transacciones.** El Dashboard muestra el historial completo, pero sin filtros por fondo, tipo o fechas, y las operaciones registradas no pueden editarse ni anularse. Una mejora natural es añadir filtros, paginación en servidor y la corrección de operaciones erróneas.
-- **Evolución temporal.** No se almacena la serie histórica del patrimonio; añadirla permitiría mostrar gráficos de evolución y rentabilidades anualizadas.
+- **Evolución temporal.** No se almacena un histórico de valores liquidativos: la gráfica de evolución estima los valores intermedios interpolando entre precios conocidos (sección 3.5). Guardar la serie real permitiría una evolución exacta y rentabilidades anualizadas.
+- **Aportaciones automáticas.** Se registran al precio del momento en que se ejecutan, que en el plan gratuito de Render puede ser algo posterior a la fecha programada si no hay un cron externo configurado. Hay un solo plan por usuario.
 - **Divisa y fiscalidad.** El sistema trabaja en euros y no modela comisiones ni impuestos.
 
 ---
 
-## 6. Guía de Despliegue en la Nube
+## Anexo A. Guía de despliegue en la nube
 
-Esta guía publica la aplicación con servicios que tienen plan gratuito: **Neon** (PostgreSQL), **Render** (backend) y **Vercel** (frontend). Con el código ya subido a GitHub, lleva unos 10 minutos. El orden importa: cada servicio necesita la URL del anterior.
+Este anexo describe la publicación de la aplicación con servicios que ofrecen plan gratuito: **Neon** (PostgreSQL), **Render** (backend) y **Vercel** (frontend). Se parte de que el código está en un repositorio de GitHub. El orden de los pasos importa, porque cada servicio necesita la URL del anterior.
 
 | Servicio | Qué aloja | Variables que necesita |
 |---|---|---|
@@ -897,24 +1197,27 @@ Esta guía publica la aplicación con servicios que tienen plan gratuito: **Neon
 | Render | API Fastify | `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL` |
 | Vercel | Frontend React | `VITE_API_URL` |
 
-### 6.1 Base de datos en Neon (2 min)
+### A.1 Base de datos en Neon
 
-1. Crea una cuenta en [neon.tech](https://neon.tech) y un proyecto nuevo (región cercana a la de Render, p. ej. Fráncfurt).
-2. En **Connect**, copia la cadena de conexión **directa** (sin `-pooler` en el host). Termina en `?sslmode=require`.
-3. Crea las tablas desde tu máquina, con esa cadena en `backend/.env` como `DATABASE_URL`:
+1. Se crea una cuenta en [neon.tech](https://neon.tech) y un proyecto nuevo, en una región próxima a la de Render (por ejemplo, Fráncfort).
+2. En **Connect** se copia la cadena de conexión **directa** (sin `-pooler` en el host), que termina en `?sslmode=require`.
+3. Desde una máquina local, con esa cadena como `DATABASE_URL` y `SEED_DEMO_USER=false` en `backend/.env`, se genera el cliente de Prisma, se crean las tablas y se carga el catálogo:
 
    ```bash
    cd backend
-   npx prisma db push
-   npm run db:seed   # opcional: catálogo de fondos y usuario demo
+   npx prisma generate     # el seed usa el cliente generado, que no se versiona
+   npx prisma db push      # crea las tablas
+   npx prisma db seed      # carga el catálogo de fondos
    ```
 
-   El catálogo de fondos se crea con el seed; sin él, el formulario de transacciones no tendrá fondos que elegir.
+   El seed es imprescindible: sin el catálogo, el formulario de transacciones no tiene fondos que elegir. Con `SEED_DEMO_USER=false` no crea el usuario de demostración, cuya contraseña es pública en el repositorio. Si se hubiera cargado, debe eliminarse ese usuario de la base de datos de producción (por ejemplo, con `npx prisma studio`); sus operaciones y objetivos se borran en cascada.
 
-### 6.2 Backend en Render (4 min)
+   Terminado este paso, conviene restaurar en `backend/.env` la cadena de la base de datos local para no trabajar por error contra producción.
 
-1. En [render.com](https://render.com): **New → Web Service** y conecta el repositorio de GitHub.
-2. Configura:
+### A.2 Backend en Render
+
+1. En [render.com](https://render.com) se crea un servicio con **New → Web Service** y se conecta el repositorio de GitHub.
+2. Configuración:
 
    | Campo | Valor |
    |---|---|
@@ -924,71 +1227,88 @@ Esta guía publica la aplicación con servicios que tienen plan gratuito: **Neon
    | Start Command | `npm start` |
 
    `npm run build` ejecuta `prisma generate` (el cliente de Prisma no se versiona) y después `tsc`, que deja el resultado en `dist/`. `npm start` lanza `node dist/server.js`, que escucha en `0.0.0.0` y en el puerto que Render inyecta en `PORT`.
-3. En **Environment**, añade:
+3. Variables en **Environment**:
 
    | Variable | Valor |
    |---|---|
-   | `DATABASE_URL` | La cadena de Neon del paso 6.1 |
-   | `JWT_SECRET` | Un valor largo y aleatorio (`openssl rand -base64 48`) |
-   | `FRONTEND_URL` | Se rellena en el paso 6.4 |
+   | `DATABASE_URL` | La cadena de Neon del paso A.1 |
+   | `JWT_SECRET` | Un valor largo y aleatorio (por ejemplo, `openssl rand -base64 48`) |
+   | `FRONTEND_URL` | Se completa en el paso A.4 |
 
-4. Despliega y comprueba que `https://<tu-servicio>.onrender.com/api/health` responde `{"status":"ok"}`.
+4. Tras el despliegue, `https://<servicio>.onrender.com/api/health` debe responder `{"status":"ok"}`.
 
-> En el plan gratuito, Render duerme el servicio tras unos minutos sin tráfico; la primera petición posterior puede tardar hasta un minuto.
+> En el plan gratuito, Render suspende el servicio tras unos minutos sin tráfico; la primera petición posterior puede tardar hasta un minuto.
 
-### 6.3 Frontend en Vercel (3 min)
+### A.3 Frontend en Vercel
 
-1. En [vercel.com](https://vercel.com): **Add New → Project** e importa el mismo repositorio.
-2. Configura **Root Directory** = `frontend`. Vercel detecta Vite (build `npm run build`, salida `dist`).
-3. En **Environment Variables** añade `VITE_API_URL` con la URL de Render, **sin barra final** (p. ej. `https://gestor-api.onrender.com`).
-4. Despliega. El archivo `frontend/vercel.json` redirige todas las rutas a `index.html`, necesario para que funcionen enlaces directos como `/reset-password?token=…`.
+1. En [vercel.com](https://vercel.com) se importa el mismo repositorio con **Add New → Project**.
+2. Se indica **Root Directory** = `frontend`. Vercel detecta Vite (build `npm run build`, salida `dist`).
+3. En **Environment Variables** se añade `VITE_API_URL` con la URL de Render, **sin barra final** (por ejemplo, `https://gestor-api.onrender.com`).
+4. Se despliega. El archivo `frontend/vercel.json` redirige todas las rutas a `index.html`, lo que permite abrir directamente enlaces como `/reset-password?token=…`.
 
-### 6.4 Cerrar el círculo: CORS
+### A.4 Configuración de CORS
 
-El backend solo acepta peticiones del origen indicado en `FRONTEND_URL`. Vuelve a Render, define `FRONTEND_URL` con la URL de Vercel (p. ej. `https://gestor-carteras.vercel.app`, sin barra final) y guarda: el servicio se reinicia. Esa misma variable se usa para construir el enlace del correo de recuperación de contraseña.
+Con `FRONTEND_URL` definida, el backend solo acepta peticiones de ese origen. En Render se asigna a `FRONTEND_URL` la URL de Vercel (por ejemplo, `https://gestor-carteras.vercel.app`, sin barra final) y se guarda; el servicio se reinicia. La misma variable sirve para construir el enlace del correo de recuperación de contraseña.
 
-Si `FRONTEND_URL` no está definida, el backend permite cualquier origen. Es cómodo en desarrollo o demos, pero no debe quedarse así en producción.
+Si `FRONTEND_URL` no está definida, el backend acepta cualquier origen y el enlace del correo apunta a `http://localhost:5173`. Es aceptable en desarrollo, pero no en producción.
 
-### 6.5 Variables de entorno
+### A.5 Variables de entorno
 
 | Variable | Dónde | Descripción |
 |---|---|---|
 | `DATABASE_URL` | Backend | Cadena de conexión PostgreSQL (Neon, con `sslmode=require`) |
 | `JWT_SECRET` | Backend | Secreto de firma de los tokens; distinto del de desarrollo |
-| `FRONTEND_URL` | Backend | Origen del frontend: CORS y enlaces de los emails |
+| `FRONTEND_URL` | Backend | Origen del frontend: CORS y enlaces de los correos |
 | `PORT` | Backend | Lo inyecta Render; en local, 3001 por defecto |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Backend | Opcionales. Sin ellas, el correo de recuperación usa una cuenta de pruebas de Ethereal y no llega a ningún buzón real |
-| `VITE_API_URL` | Frontend | URL pública del backend. Se incrusta al compilar: si la cambias, hay que redesplegar |
+| `CRON_SECRET` | Backend | Opcional. Habilita `POST /api/cron/contributions/run-due` para el cron externo de aportaciones (A.8) |
+| `CONTRIBUTIONS_CHECK_MINUTES` | Backend | Opcional. Cada cuántos minutos comprueba el proceso las aportaciones vencidas (15; `0` lo desactiva) |
+| `SEED_DEMO_USER` | Seed (local) | Con `false`, el seed carga solo el catálogo, sin el usuario de demostración |
+| `VITE_API_URL` | Frontend | URL pública del backend. Se incrusta al compilar: si cambia, hay que volver a desplegar |
 
 Las plantillas están en `backend/.env.example` y `frontend/.env.example`. Los archivos `.env` reales están en `.gitignore` y nunca deben subirse al repositorio.
 
-### 6.6 Solución de problemas
+### A.6 Solución de problemas
 
 | Síntoma | Causa probable |
 |---|---|
 | Error de CORS en la consola del navegador | `FRONTEND_URL` no coincide exactamente con el origen de Vercel (esquema, subdominio) |
-| El frontend llama a `/api/...` en su propio dominio y da 404 | Falta `VITE_API_URL`; hay que definirla y redesplegar |
+| El frontend llama a `/api/...` en su propio dominio y obtiene 404 | Falta `VITE_API_URL`; hay que definirla y volver a desplegar |
 | `500` en login o registro | Las tablas no existen (falta `prisma db push`) o `DATABASE_URL` es incorrecta |
 | `Cannot find module .../generated/prisma` en Render | El Build Command no ejecutó `npm run build` |
-| Primera petición muy lenta | Render está despertando el servicio gratuito |
+| `Cannot find module .../generated/prisma` al ejecutar el seed | Falta `npx prisma generate` en la máquina local |
+| Primera petición muy lenta | Render está reactivando el servicio gratuito |
 
-### 6.7 Correo de recuperación de contraseña con Brevo
+### A.7 Correo de activación y de recuperación de contraseña con Brevo
 
-Sin variables `SMTP_*` el backend usa una cuenta de pruebas de Ethereal, que no entrega a buzones reales. Para producción se puede usar el SMTP gratuito de [Brevo](https://www.brevo.com) (unos 300 correos al día).
+Sin variables `SMTP_*`, el backend usa una cuenta de pruebas de Ethereal, que no entrega a buzones reales. En producción puede usarse el SMTP gratuito de [Brevo](https://www.brevo.com) (unos 300 correos al día).
 
-1. Crea una cuenta en Brevo y, en **Senders, Domains & Dedicated IPs → Senders**, añade y verifica una dirección de remitente (te llega un correo de confirmación). No hace falta dominio propio.
-2. En **SMTP & API → SMTP**, anota el servidor (`smtp-relay.brevo.com`) y el *login*, y genera una **clave SMTP**. Esa clave es la contraseña; no es la de tu cuenta.
-3. En Render, en **Environment**, añade:
+1. Se crea una cuenta en Brevo y, en **Senders, Domains & Dedicated IPs → Senders**, se añade y verifica una dirección de remitente mediante el correo de confirmación que envía Brevo. No hace falta dominio propio.
+2. En **SMTP & API → SMTP** figuran el servidor (`smtp-relay.brevo.com`) y el *login*; allí se genera una **clave SMTP**, que actúa como contraseña (no es la de la cuenta de Brevo).
+3. En Render, en **Environment**, se añaden:
 
    | Variable | Valor |
    |---|---|
    | `SMTP_HOST` | `smtp-relay.brevo.com` |
-   | `SMTP_PORT` | `2525` (no uses `587`: Render lo bloquea) |
+   | `SMTP_PORT` | `2525` (no `587`: Render lo bloquea) |
    | `SMTP_USER` | El login SMTP de Brevo |
    | `SMTP_PASS` | La clave SMTP generada |
-   | `SMTP_FROM` | `"Gestor de Carteras" <remitente-verificado@tudominio.com>` |
+   | `SMTP_FROM` | `"Gestor de Carteras" <remitente-verificado@dominio.com>` |
    | `FRONTEND_URL` | La URL de Vercel, sin barra final |
 
-4. Guarda: Render reinicia el servicio. Pide una recuperación desde `/forgot-password` con un usuario real y revisa el buzón (y la carpeta de spam).
+4. Al guardar, Render reinicia el servicio. Los correos de activación de cuenta y de recuperación de contraseña usan esta misma configuración. Para comprobarlo, se registra un usuario o se solicita una recuperación desde `/forgot-password` con un usuario real y se revisa el buzón (incluida la carpeta de correo no deseado).
 
-> Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, revisa los **Logs** de Render: un error de conexión o de autenticación aparece como «No se pudo enviar el email de recuperación».
+> Los planes gratuitos de Render bloquean la salida por los puertos SMTP habituales (25, 465 y 587): con `587` la conexión no llega a Brevo y este no registra nada. Con `2525` el envío funciona (verificado en producción). Si el correo no llega, los **Logs** de Render muestran cualquier error de conexión o de autenticación con el mensaje «No se pudo enviar el email de verificación» o «No se pudo enviar el email de recuperación».
+
+### A.8 Cron externo para las aportaciones automáticas
+
+En el plan gratuito, Render suspende el backend tras unos 15 minutos sin tráfico. Las aportaciones vencidas se ejecutan igualmente cuando el usuario abre la aplicación, pero para que se registren el día que toca hace falta que algo despierte el servidor:
+
+1. Se genera un secreto largo (`openssl rand -hex 32`) y se añade en Render como `CRON_SECRET`.
+2. En un servicio de cron gratuito (por ejemplo, [cron-job.org](https://cron-job.org)) se programa una petición diaria, a primera hora:
+   - Método `POST` a `https://<backend>.onrender.com/api/cron/contributions/run-due`.
+   - Cabecera `Authorization: Bearer <CRON_SECRET>`.
+   - Tiempo de espera amplio (unos 60 s): el primer arranque tras la suspensión tarda.
+3. La respuesta resume lo ejecutado (`executed`, `failed`, `users`). Los **Logs** de Render muestran además «Aportaciones automáticas: …».
+
+Una alternativa equivalente es un *workflow* programado de GitHub Actions con `curl`.

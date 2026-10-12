@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Euro, Loader2, Plus, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AutoContributionCard } from "@/components/AutoContributionCard";
 import { ExecuteRebalanceDialog } from "@/components/ExecuteRebalanceDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -399,6 +400,13 @@ export default function Rebalance() {
               )}
             </CardContent>
           </Card>
+
+          <AutoContributionCard
+            hasSavedTargets={portfolio.targets.length > 0}
+            hasUnsavedTargets={hasUnsaved}
+            suggestedAmount={contributionValue || null}
+            onExecuted={() => load(false)}
+          />
         </>
       )}
     </div>

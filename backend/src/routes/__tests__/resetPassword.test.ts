@@ -9,6 +9,7 @@ interface Row {
   createdAt: Date;
   resetPasswordToken: string | null;
   resetPasswordExpires: Date | null;
+  isEmailVerified: boolean;
 }
 
 const db = vi.hoisted(() => {
@@ -55,6 +56,7 @@ function seedUser(over: Partial<Row> = {}) {
     createdAt: new Date(),
     resetPasswordToken: null,
     resetPasswordExpires: null,
+    isEmailVerified: true,
     ...over,
   };
   db.users.set(row.id, row);
@@ -126,6 +128,14 @@ describe("POST /api/auth/reset-password", () => {
 
     const reuse = await post("/api/auth/reset-password", { token, newPassword: "OtraClave789!" });
     expect(reuse.statusCode).toBe(400);
+  });
+
+  it("verifica la cuenta si estaba pendiente: el enlace llegó a su email", async () => {
+    const user = seedUser({ isEmailVerified: false });
+    const token = await requestToken();
+
+    await post("/api/auth/reset-password", { token, newPassword: NEW_PASSWORD });
+    expect(user.isEmailVerified).toBe(true);
   });
 
   it("rechaza un token expirado", async () => {

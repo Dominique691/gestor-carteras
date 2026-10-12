@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "../../db.js";
 import { Decimal, round } from "../../lib/decimal.js";
 import { validationError } from "../../lib/http.js";
+import { catchUpUser } from "../../services/contributions.service.js";
 import { InsufficientSharesError, replay } from "../portfolio/portfolio.calc.js";
 import { createTransactionSchema } from "./transactions.schemas.js";
 import type { TransactionDto } from "./transactions.types.js";
@@ -33,6 +34,10 @@ class FundNotTradedError extends Error {}
 
 const transactionsRoutes: FastifyPluginAsync = async (app) => {
   app.addHook("onRequest", app.authenticate);
+  // Antes de leer la cartera se ejecutan las aportaciones automáticas vencidas (el servidor puede haber estado dormido).
+  app.addHook("preHandler", async (request) => {
+    await catchUpUser(request.user.sub, (m) => request.log.warn(m));
+  });
 
   app.get("/", async (request): Promise<TransactionDto[]> => {
     const txs = await prisma.transaction.findMany({

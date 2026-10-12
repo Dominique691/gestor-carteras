@@ -89,3 +89,42 @@ export interface CreateTransactionBody {
   pricePerShare: number;
   transactionDate?: string;
 }
+
+/** Punto de GET /api/portfolio/history, en orden cronológico. */
+export interface PortfolioHistoryPoint {
+  /** Día (YYYY-MM-DD, UTC). */
+  date: string;
+  /** Capital invertido en las posiciones abiertas, en €. */
+  invested: number;
+  /** Valor de mercado estimado ese día, en €. */
+  currentValue: number;
+}
+
+export type ContributionFrequency = "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL";
+
+/** Aportación periódica automática (GET/PUT /api/contributions). */
+export interface ContributionPlan {
+  amount: number;
+  frequency: ContributionFrequency;
+  /** Fecha de la primera aportación (YYYY-MM-DD). */
+  startDate: string;
+  active: boolean;
+  /** Próxima ejecución (YYYY-MM-DD), o null si está pausada. */
+  nextRunAt: string | null;
+}
+
+export interface ContributionRun {
+  id: string;
+  /** Fecha programada (YYYY-MM-DD). */
+  scheduledFor: string;
+  executedAt: string;
+  amount: number;
+  status: "SUCCESS" | "FAILED";
+  purchases: number;
+  message: string | null;
+}
+
+export interface Contributions {
+  plan: ContributionPlan | null;
+  runs: ContributionRun[];
+}

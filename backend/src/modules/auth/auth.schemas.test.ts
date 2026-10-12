@@ -26,4 +26,11 @@ describe("registerSchema (contraseña)", () => {
   it.each(["Secreta123!", "Password123!", "C0ntraseña#Larga"])("acepta %s", (pw) => {
     expect(parse(pw).success).toBe(true);
   });
+
+  it("limita la longitud en bytes, no en caracteres (límite de bcrypt)", () => {
+    const ascii = "A1!" + "a".repeat(69); // 72 caracteres, 72 bytes
+    const multibyte = "A1!" + "ñ".repeat(69); // 72 caracteres, 141 bytes
+    expect(parse(ascii).success).toBe(true);
+    expect(messages(multibyte)).toEqual([expect.stringContaining("72 bytes")]);
+  });
 });

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { toast } from "sonner";
 import { AddTransactionDialog } from "@/components/AddTransactionDialog";
+import { PortfolioHistoryChart, PortfolioHistorySkeleton } from "@/components/PortfolioHistoryChart";
 import { TransactionHistory } from "@/components/TransactionHistory";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import {
   formatPrice,
   formatShares,
 } from "@/lib/format";
-import type { Portfolio, SyncSummary, TransactionItem } from "@/lib/types";
+import type { Portfolio, PortfolioHistoryPoint, SyncSummary, TransactionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Paleta fintech: índigo para renta variable y teal para renta fija; el resto, colores de reserva.
@@ -82,9 +83,19 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<TransactionItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [evolution, setEvolution] = useState<PortfolioHistoryPoint[] | null>(null);
+  const [evolutionError, setEvolutionError] = useState<string | null>(null);
 
-  // Cartera e historial se cargan en paralelo y fallan por separado: un error en uno no oculta el otro.
+  // Cartera, historial y evolución se cargan en paralelo y fallan por separado: un error en uno no oculta el resto.
+  // La evolución no bloquea el resto del dashboard: su tarjeta muestra un esqueleto hasta que llega.
   const load = useCallback(async () => {
+    const evolutionLoad = api<PortfolioHistoryPoint[]>("/api/portfolio/history").then(
+      (points) => {
+        setEvolution(points);
+        setEvolutionError(null);
+      },
+      () => setEvolutionError("No se pudo cargar la evolución del patrimonio"),
+    );
     const [p, t] = await Promise.allSettled([
       api<Portfolio>("/api/portfolio"),
       api<TransactionItem[]>("/api/transactions"),
@@ -101,6 +112,7 @@ export default function Dashboard() {
     } else {
       setHistoryError("No se pudo cargar el historial de transacciones");
     }
+    await evolutionLoad;
   }, []);
 
   useEffect(() => {
@@ -265,6 +277,16 @@ export default function Dashboard() {
                   </ul>
                 </CardContent>
               </Card>
+
+              {evolutionError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {evolutionError}
+                </p>
+              ) : evolution ? (
+                <PortfolioHistoryChart data={evolution} />
+              ) : (
+                <PortfolioHistorySkeleton />
+              )}
 
               <Card>
                 <CardHeader>

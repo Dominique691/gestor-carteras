@@ -1,7 +1,13 @@
 import { prisma } from "../db.js";
 import { Decimal, round } from "../lib/decimal.js";
+import { buildHistory } from "../modules/portfolio/history.calc.js";
 import { replay } from "../modules/portfolio/portfolio.calc.js";
-import type { PortfolioDto, PositionDto, TargetDto } from "../modules/portfolio/portfolio.types.js";
+import type {
+  PortfolioDto,
+  PortfolioHistoryPointDto,
+  PositionDto,
+  TargetDto,
+} from "../modules/portfolio/portfolio.types.js";
 
 const ZERO = new Decimal(0);
 const pct = (part: Decimal, whole: Decimal) => (whole.isZero() ? ZERO : part.div(whole).times(100));
@@ -68,4 +74,10 @@ export async function buildPortfolio(userId: string): Promise<PortfolioDto> {
     positions,
     targets: targetDtos,
   };
+}
+
+export async function buildPortfolioHistory(userId: string, today = new Date()): Promise<PortfolioHistoryPointDto[]> {
+  const txs = await prisma.transaction.findMany({ where: { userId } });
+  const funds = await prisma.fund.findMany({ where: { id: { in: [...new Set(txs.map((t) => t.fundId))] } } });
+  return buildHistory(txs, new Map(funds.map((f) => [f.id, f.currentNAV])), today);
 }
