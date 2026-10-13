@@ -55,6 +55,12 @@ function sendVerification(request: FastifyRequest, email: string, token: string)
   );
 }
 
+export const DEMO_TTL_MS = 24 * 60 * 60 * 1000;
+export const DEMO_MAX_PER_IP = 10;
+const DEMO_WINDOW_MS = 60 * 60 * 1000;
+// Valor que no es un hash bcrypt válido: ninguna contraseña lo satisface, la cuenta demo solo se abre vía /demo.
+const UNUSABLE_PASSWORD_HASH = "!cuenta-demo-sin-contrasena";
+
 const toUserDto = (u: { id: string; email: string; createdAt: Date }): AuthUserDto => ({
   id: u.id,
   email: u.email,
@@ -62,6 +68,38 @@ const toUserDto = (u: { id: string; email: string; createdAt: Date }): AuthUserD
 });
 
 const authRoutes: FastifyPluginAsync = async (app) => {
+  // Límite por IP en memoria (se reinicia con el servidor): basta para evitar que se llene la BD de cuentas demo.
+  const demoHits = new Map<string, number[]>();
+
+  // Cada visita recibe una cuenta nueva y vacía; no hay contraseña ni datos compartidos entre visitantes.
+  app.post("/demo", async (request, reply): Promise<AuthResponseDto | ErrorResponseDto> => {
+    const now = Date.now();
+    for (const [ip, hits] of demoHits) {
+      const recent = hits.filter((t) => now - t < DEMO_WINDOW_MS);
+      if (recent.length) demoHits.set(ip, recent);
+      else demoHits.delete(ip);
+    }
+    const hits = demoHits.get(request.ip) ?? [];
+    if (hits.length >= DEMO_MAX_PER_IP) {
+      return reply.code(429).send({ error: "Demasiadas demos desde esta conexión. Inténtalo más tarde." });
+    }
+    demoHits.set(request.ip, [...hits, now]);
+
+    // Limpieza oportunista de demos caducadas (las tablas relacionadas se borran en cascada).
+    await prisma.user.deleteMany({ where: { isDemo: true, createdAt: { lt: new Date(now - DEMO_TTL_MS) } } });
+
+    const user = await prisma.user.create({
+      data: {
+        email: `demo-${randomBytes(6).toString("hex")}@demo.invalid`,
+        passwordHash: UNUSABLE_PASSWORD_HASH,
+        isEmailVerified: true,
+        isDemo: true,
+      },
+    });
+    const token = app.jwt.sign({ sub: user.id, email: user.email });
+    return { token, user: toUserDto(user) };
+  });
+
   // El registro no inicia sesión: la cuenta queda pendiente hasta abrir el enlace enviado por email.
   app.post("/register", async (request, reply): Promise<MessageResponseDto | ErrorResponseDto> => {
     const parsed = registerSchema.safeParse(request.body);

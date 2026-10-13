@@ -8,7 +8,7 @@ import portfolioRoutes from "./modules/portfolio/portfolio.routes.js";
 import transactionsRoutes from "./modules/transactions/transactions.routes.js";
 
 export async function buildApp(opts: { logger?: boolean } = {}) {
-  const app = Fastify({ logger: opts.logger ?? true });
+  const app = Fastify({ logger: opts.logger ?? true, trustProxy: true });
 
   // Con FRONTEND_URL solo se acepta ese origen; sin ella (desarrollo/demo) se permite cualquiera.
   const frontendUrl = process.env.FRONTEND_URL?.trim().replace(/\/+$/, "");

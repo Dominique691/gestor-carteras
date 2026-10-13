@@ -10,6 +10,8 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   /** Crea la cuenta sin iniciar sesión (queda pendiente de verificar el email); devuelve el mensaje del backend. */
   register: (email: string, password: string) => Promise<string>;
+  /** Abre una cuenta de demostración nueva y vacía (el backend la crea y la borra a las 24 h). */
+  startDemo: () => Promise<void>;
   logout: () => void;
 }
 
@@ -64,6 +66,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [setSession],
   );
 
+  const startDemo = useCallback(
+    async () => setSession(await api<AuthResponse>("/api/auth/demo", { body: {} })),
+    [setSession],
+  );
+
   const register = useCallback(
     async (email: string, password: string) =>
       (await api<MessageResponse>("/api/auth/register", { body: { email, password } })).message,
@@ -88,8 +95,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ token, user, isAuthenticated: token !== null, login, register, logout }),
-    [token, user, login, register, logout],
+    () => ({ token, user, isAuthenticated: token !== null, login, register, startDemo, logout }),
+    [token, user, login, register, startDemo, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

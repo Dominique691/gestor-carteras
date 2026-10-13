@@ -272,6 +272,11 @@ El algoritmo **nunca propone vender**: reparte la aportación entre los fondos q
 
 ## 6. Credenciales de prueba
 
+Hay dos formas de probar la aplicación sin registrarse:
+
+- **Botón «Probar demo»** de la landing: `POST /api/auth/demo` crea una cuenta desechable **vacía** (`demo-xxxx@demo.invalid`, sin contraseña) y abre sesión. Cada visita recibe una nueva; las de más de 24 h se borran (con sus datos) la próxima vez que alguien abre una demo. Límite de 10 demos por hora y por IP.
+- **Usuario de prueba con datos** (para revisar el proyecto), descrito a continuación.
+
 El comando `npx prisma db seed` crea un usuario de demostración con una cartera de ejemplo (siete operaciones en cinco fondos y un reparto objetivo del 100 %):
 
 | Campo | Valor |

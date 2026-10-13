@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/AppLayout";
 import { GuestRoute, ProtectedRoute } from "@/components/RouteGuards";
 import Dashboard from "@/pages/Dashboard";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
+import LandingPage from "@/pages/LandingPage";
 import LoginPage from "@/pages/LoginPage";
 import Rebalance from "@/pages/Rebalance";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
@@ -12,6 +13,7 @@ export default function App() {
   return (
     <Routes>
       <Route element={<GuestRoute />}>
+        <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -24,7 +26,7 @@ export default function App() {
           <Route path="/rebalance" element={<Rebalance />} />
         </Route>
       </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
