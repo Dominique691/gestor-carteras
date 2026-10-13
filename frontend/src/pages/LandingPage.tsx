@@ -1,14 +1,13 @@
-import { CalendarClock, Check, LineChart, Loader2, Scale, ShieldCheck, TrendingUp, type LucideIcon } from "lucide-react";
+import { CalendarClock, LineChart, Loader2, Scale, ShieldCheck, TrendingUp, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AuthCard } from "@/components/AuthCard";
 import { ModeToggle } from "@/components/ModeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 const features: { icon: LucideIcon; title: string; description: string }[] = [
   {
@@ -30,32 +29,6 @@ const features: { icon: LucideIcon; title: string; description: string }[] = [
     icon: ShieldCheck,
     title: "Seguridad",
     description: "Verificación de email, contraseñas robustas y sesiones protegidas. Nunca pedimos acceso a tu broker.",
-  },
-];
-
-const plans = [
-  {
-    name: "Free",
-    price: "0 €",
-    period: "para siempre",
-    description: "Todo lo esencial para llevar tu cartera indexada.",
-    features: ["Seguimiento de tu cartera", "Reparto objetivo y rebalanceo", "Histórico de operaciones", "Modo claro y oscuro"],
-    cta: "Empezar gratis",
-    highlighted: false,
-  },
-  {
-    name: "Pro",
-    price: "4,99 €",
-    period: "al mes",
-    description: "Para quien quiere automatizar y analizar a fondo.",
-    features: [
-      "Todo lo del plan Free",
-      "Aportaciones periódicas automáticas",
-      "Gráficos históricos avanzados",
-      "Soporte prioritario",
-    ],
-    cta: "Elegir Pro",
-    highlighted: true,
   },
 ];
 
@@ -90,9 +63,6 @@ export default function LandingPage() {
           <nav aria-label="Principal" className="ml-4 hidden items-center gap-1 md:flex">
             <a href="#beneficios" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Beneficios
-            </a>
-            <a href="#precios" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
-              Precios
             </a>
             <Link to="/forgot-password" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Recuperar contraseña
@@ -154,45 +124,6 @@ export default function LandingPage() {
                     <CardTitle className="text-base">{title}</CardTitle>
                   </CardHeader>
                   <CardContent className="text-muted-foreground">{description}</CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="precios" className="scroll-mt-14 border-t py-16">
-          <div className="mx-auto max-w-4xl px-4">
-            <h2 className="text-center text-3xl font-bold tracking-tight">Planes y precios</h2>
-            <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
-              Empieza gratis y pasa a Pro cuando quieras automatizar tu inversión.
-            </p>
-            <div className="mt-10 grid gap-6 md:grid-cols-2">
-              {plans.map((plan) => (
-                <Card key={plan.name} className={cn(plan.highlighted && "ring-2 ring-primary")}>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      {plan.name}
-                      {plan.highlighted && <Badge>Recomendado</Badge>}
-                    </CardTitle>
-                    <p className="pt-2">
-                      <span className="text-3xl font-bold">{plan.price}</span>{" "}
-                      <span className="text-muted-foreground">{plan.period}</span>
-                    </p>
-                    <CardDescription>{plan.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <ul className="space-y-2">
-                      {plan.features.map((f) => (
-                        <li key={f} className="flex items-start gap-2">
-                          <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                          {f}
-                        </li>
-                      ))}
-                    </ul>
-                    <Button className="w-full" variant={plan.highlighted ? "default" : "outline"} onClick={goToAccess}>
-                      {plan.cta}
-                    </Button>
-                  </CardContent>
                 </Card>
               ))}
             </div>

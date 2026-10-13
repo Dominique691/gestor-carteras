@@ -52,7 +52,7 @@ describe("rutas", () => {
     renderAt("/");
     expect(screen.getByRole("heading", { level: 1, name: /siempre en equilibrio/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Iniciar Sesión" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Planes y precios" })).toBeInTheDocument();
+    expect(screen.queryByText(/planes y precios/i)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Recuperar contraseña" })).toHaveAttribute("href", "/forgot-password");
   });
 
