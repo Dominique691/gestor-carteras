@@ -49,10 +49,10 @@ const screenshots = [
   },
   {
     name: "aportacion",
-    height: 243,
+    height: 596,
     title: "Aportaciones programadas",
-    description: "Activa una aportación periódica y se repartirá sola entre tus fondos según tus objetivos.",
-    alt: "Tarjeta de aportación automática activa de 200 euros mensuales con su próxima fecha",
+    description: "Activa «Repetir automáticamente» en tu aportación, elige la frecuencia y la primera fecha, y se repartirá sola entre tus fondos según tus objetivos.",
+    alt: "Formulario de nueva aportación con el interruptor de repetir automáticamente activado y los desplegables de frecuencia y primera fecha",
   },
 ];
 
