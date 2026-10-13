@@ -259,7 +259,7 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, amoun
               )
             )}
             <div className="flex flex-wrap gap-2">
-              <Button type="submit" variant={plan ? "default" : "secondary"} disabled={busy || !amountOk || !startDate || !hasSavedTargets}>
+              <Button type="submit" disabled={busy || !amountOk || !startDate || !hasSavedTargets}>
                 {busy && <Loader2 className="animate-spin" />}
                 {plan ? "Guardar cambios" : "Activar aportación automática"}
               </Button>
