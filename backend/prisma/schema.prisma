@@ -23,6 +23,9 @@ model User {
   emailVerificationToken   String?   @unique
   emailVerificationExpires DateTime?
 
+  /// Cuenta desechable creada por "Probar demo": se borra pasadas 24 h (con todos sus datos, en cascada).
+  isDemo Boolean @default(false)
+
   transactions      Transaction[]
   targetAllocations TargetAllocation[]
   contributionPlan  ContributionPlan?

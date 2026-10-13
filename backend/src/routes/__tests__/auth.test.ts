@@ -11,6 +11,7 @@ const db = vi.hoisted(() => {
     isEmailVerified: boolean;
     emailVerificationToken: string | null;
     emailVerificationExpires: Date | null;
+    isDemo?: boolean;
   }
   type Where = { id?: string; email?: string; emailVerificationToken?: string };
   const users = new Map<string, Row>();
@@ -42,6 +43,11 @@ const db = vi.hoisted(() => {
                 : u.emailVerificationToken === where.emailVerificationToken;
           return [...users.values()].find(match) ?? null;
         },
+        async deleteMany({ where }: { where: { isDemo: boolean; createdAt: { lt: Date } } }) {
+          for (const u of [...users.values()]) {
+            if (u.isDemo === where.isDemo && u.createdAt < where.createdAt.lt) users.delete(u.id);
+          }
+        },
         async update({ where, data }: { where: { id: string }; data: Partial<Row> }) {
           return Object.assign(users.get(where.id)!, data);
         },
@@ -55,7 +61,7 @@ vi.mock("../../services/email.service.js", () => ({ sendVerificationEmail, sendR
 
 import { createHash } from "node:crypto";
 import { buildApp } from "../../app.js";
-import { UNVERIFIED_MESSAGE, VERIFY_TOKEN_TTL_MS } from "../../modules/auth/auth.routes.js";
+import { DEMO_MAX_PER_IP, DEMO_TTL_MS, UNVERIFIED_MESSAGE, VERIFY_TOKEN_TTL_MS } from "../../modules/auth/auth.routes.js";
 
 let app: FastifyInstance;
 
@@ -89,6 +95,50 @@ afterAll(async () => {
 beforeEach(() => {
   db.users.clear();
   sendVerificationEmail.mockClear();
+});
+
+describe("POST /api/auth/demo", () => {
+  it("crea una cuenta demo nueva y vacía cada vez, ya verificada, y devuelve un JWT válido", async () => {
+    const a = await post("/api/auth/demo", {});
+    const b = await post("/api/auth/demo", {});
+
+    expect(a.statusCode).toBe(200);
+    expect(a.json().user.email).toMatch(/^demo-[0-9a-f]+@demo\.invalid$/);
+    expect(a.json().user.id).not.toBe(b.json().user.id);
+    expect(db.users.size).toBe(2);
+    expect([...db.users.values()].every((u) => u.isDemo && u.isEmailVerified)).toBe(true);
+
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${a.json().token}` } });
+    expect(me.statusCode).toBe(200);
+  });
+
+  it("no se puede entrar a una cuenta demo con contraseña", async () => {
+    const { user } = (await post("/api/auth/demo", {})).json();
+    for (const password of ["", "Secreta123!", "!cuenta-demo-sin-contrasena"]) {
+      const res = await post("/api/auth/login", { email: user.email, password: password || "x" });
+      expect(res.statusCode).toBe(401);
+    }
+  });
+
+  it("borra las demos de más de 24 h y conserva las cuentas reales", async () => {
+    await registerVerified();
+    const old = (await post("/api/auth/demo", {})).json().user.id;
+    db.users.get(old)!.createdAt = new Date(Date.now() - DEMO_TTL_MS - 1000);
+
+    await post("/api/auth/demo", {});
+
+    expect(db.users.has(old)).toBe(false);
+    expect(db.users.size).toBe(2); // la cuenta real + la demo nueva
+  });
+
+  it("limita las demos por IP", async () => {
+    // App propia: el contador de IP vive en la instancia y los demás tests ya han consumido el de `app`.
+    const fresh = await buildApp({ logger: false });
+    const demo = () => fresh.inject({ method: "POST", url: "/api/auth/demo", payload: {} });
+    for (let i = 0; i < DEMO_MAX_PER_IP; i++) expect((await demo()).statusCode).toBe(200);
+    expect((await demo()).statusCode).toBe(429);
+    await fresh.close();
+  });
 });
 
 describe("POST /api/auth/register", () => {

@@ -48,10 +48,41 @@ describe("rutas", () => {
     expect(screen.getByRole("link", { name: /dashboard/i })).toBeInTheDocument();
   });
 
+  it("sin sesión la raíz muestra la landing con la tarjeta de acceso", () => {
+    renderAt("/");
+    expect(screen.getByRole("heading", { level: 1, name: /siempre en equilibrio/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Iniciar Sesión" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Planes y precios" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Recuperar contraseña" })).toHaveAttribute("href", "/forgot-password");
+  });
+
+  it("con sesión iniciada la raíz redirige al dashboard", () => {
+    localStorage.setItem(TOKEN_KEY, "token-de-prueba");
+    renderAt("/");
+    expect(screen.getByText("Resumen de tu cartera")).toBeInTheDocument();
+  });
+
   it("con sesión iniciada /login redirige al dashboard", () => {
     localStorage.setItem(TOKEN_KEY, "token-de-prueba");
     renderAt("/login");
     expect(screen.getByText("Resumen de tu cartera")).toBeInTheDocument();
+  });
+});
+
+describe("demo", () => {
+  it("«Probar demo» abre una cuenta nueva y lleva al dashboard", async () => {
+    const user = { id: "9", email: "demo-ab12@demo.invalid", createdAt: "2026-01-01T00:00:00.000Z" };
+    const fetchMock = vi.fn((url: string) =>
+      jsonResponse(200, url === "/api/auth/demo" ? { token: "jwt-demo", user } : emptyPortfolio),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAt("/");
+    await userEvent.click(screen.getByRole("button", { name: "Probar demo" }));
+
+    await waitFor(() => expect(screen.getByText("Resumen de tu cartera")).toBeInTheDocument());
+    expect(localStorage.getItem(TOKEN_KEY)).toBe("jwt-demo");
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/demo", expect.objectContaining({ method: "POST" }));
   });
 });
 
@@ -127,7 +158,7 @@ describe("registro", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderAt("/login");
-    await userEvent.click(screen.getByRole("button", { name: "Regístrate" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Registrarse" }));
     await userEvent.type(screen.getByLabelText("Email"), "ana@example.com");
     await userEvent.type(screen.getByLabelText("Contraseña"), "Cartera-Segura-2026!");
     await userEvent.click(screen.getByRole("button", { name: "Registrarme" }));
