@@ -1,14 +1,13 @@
-import { CalendarClock, Check, LineChart, Loader2, Scale, ShieldCheck, TrendingUp, type LucideIcon } from "lucide-react";
+import { CalendarClock, LineChart, Loader2, Scale, ShieldCheck, TrendingUp, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AuthCard } from "@/components/AuthCard";
 import { ModeToggle } from "@/components/ModeToggle";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 const features: { icon: LucideIcon; title: string; description: string }[] = [
   {
@@ -33,29 +32,27 @@ const features: { icon: LucideIcon; title: string; description: string }[] = [
   },
 ];
 
-const plans = [
+const screenshots = [
   {
-    name: "Free",
-    price: "0 €",
-    period: "para siempre",
-    description: "Todo lo esencial para llevar tu cartera indexada.",
-    features: ["Seguimiento de tu cartera", "Reparto objetivo y rebalanceo", "Histórico de operaciones", "Modo claro y oscuro"],
-    cta: "Empezar gratis",
-    highlighted: false,
+    name: "rebalanceo",
+    height: 618,
+    title: "Rebalanceo inteligente",
+    description: "Indica cuánto vas a aportar y verás en qué fondos invertirlo para acercarte a tu reparto objetivo.",
+    alt: "Tabla de resultado del rebalanceo con el porcentaje actual y objetivo de cada fondo y la aportación sugerida",
   },
   {
-    name: "Pro",
-    price: "4,99 €",
-    period: "al mes",
-    description: "Para quien quiere automatizar y analizar a fondo.",
-    features: [
-      "Todo lo del plan Free",
-      "Aportaciones periódicas automáticas",
-      "Gráficos históricos avanzados",
-      "Soporte prioritario",
-    ],
-    cta: "Elegir Pro",
-    highlighted: true,
+    name: "evolucion",
+    height: 573,
+    title: "Evolución de tu patrimonio",
+    description: "Compara el capital que has invertido con el valor de mercado de tu cartera a lo largo del tiempo.",
+    alt: "Gráfico de líneas con el capital invertido y el valor actual de la cartera",
+  },
+  {
+    name: "aportacion",
+    height: 596,
+    title: "Aportaciones programadas",
+    description: "Activa «Repetir automáticamente» en tu aportación, elige la frecuencia y la primera fecha, y se repartirá sola entre tus fondos según tus objetivos.",
+    alt: "Formulario de nueva aportación con el interruptor de repetir automáticamente activado y los desplegables de frecuencia y primera fecha",
   },
 ];
 
@@ -91,8 +88,8 @@ export default function LandingPage() {
             <a href="#beneficios" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Beneficios
             </a>
-            <a href="#precios" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
-              Precios
+            <a href="#capturas" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              Capturas
             </a>
             <Link to="/forgot-password" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Recuperar contraseña
@@ -160,40 +157,38 @@ export default function LandingPage() {
           </div>
         </section>
 
-        <section id="precios" className="scroll-mt-14 border-t py-16">
+        <section id="capturas" className="scroll-mt-14 border-t py-16">
           <div className="mx-auto max-w-4xl px-4">
-            <h2 className="text-center text-3xl font-bold tracking-tight">Planes y precios</h2>
+            <h2 className="text-center text-3xl font-bold tracking-tight">Tu cartera, de un vistazo</h2>
             <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
-              Empieza gratis y pasa a Pro cuando quieras automatizar tu inversión.
+              Rebalanceo, evolución y aportaciones programadas, tal como los verás en la aplicación.
             </p>
-            <div className="mt-10 grid gap-6 md:grid-cols-2">
-              {plans.map((plan) => (
-                <Card key={plan.name} className={cn(plan.highlighted && "ring-2 ring-primary")}>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-lg">
-                      {plan.name}
-                      {plan.highlighted && <Badge>Recomendado</Badge>}
-                    </CardTitle>
-                    <p className="pt-2">
-                      <span className="text-3xl font-bold">{plan.price}</span>{" "}
-                      <span className="text-muted-foreground">{plan.period}</span>
-                    </p>
-                    <CardDescription>{plan.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <ul className="space-y-2">
-                      {plan.features.map((f) => (
-                        <li key={f} className="flex items-start gap-2">
-                          <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-                          {f}
-                        </li>
-                      ))}
-                    </ul>
-                    <Button className="w-full" variant={plan.highlighted ? "default" : "outline"} onClick={goToAccess}>
-                      {plan.cta}
-                    </Button>
-                  </CardContent>
-                </Card>
+            <div className="mt-10 space-y-12">
+              {screenshots.map(({ name, height, title, description, alt }) => (
+                <figure key={name} className="space-y-4">
+                  <figcaption>
+                    <h3 className="text-xl font-semibold">{title}</h3>
+                    <p className="mt-1 text-muted-foreground">{description}</p>
+                  </figcaption>
+                  <div className="overflow-hidden rounded-xl shadow-lg ring-1 ring-foreground/10">
+                    <img
+                      src={`/screenshots/${name}-light.png`}
+                      alt={alt}
+                      width={1680}
+                      height={height}
+                      loading="lazy"
+                      className="block h-auto w-full dark:hidden"
+                    />
+                    <img
+                      src={`/screenshots/${name}-dark.png`}
+                      alt={alt}
+                      width={1680}
+                      height={height}
+                      loading="lazy"
+                      className="hidden h-auto w-full dark:block"
+                    />
+                  </div>
+                </figure>
               ))}
             </div>
           </div>

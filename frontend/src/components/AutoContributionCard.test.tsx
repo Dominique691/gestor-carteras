@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContributionPlan, Contributions } from "@/lib/types";
 import { AutoContributionCard } from "./AutoContributionCard";
@@ -30,20 +31,45 @@ function mockApi(initial: Contributions, onPut?: (body: Record<string, unknown>)
   return fetchMock;
 }
 
-const renderCard = (props: Partial<Parameters<typeof AutoContributionCard>[0]> = {}) =>
-  render(
-    <AutoContributionCard hasSavedTargets hasUnsavedTargets={false} suggestedAmount={null} onExecuted={() => {}} {...props} />,
+type CardProps = Omit<Parameters<typeof AutoContributionCard>[0], "amount" | "onAmountChange">;
+
+/** El importe vive en «Nueva Aportación» (la página): aquí lo simula un estado mínimo. */
+function Harness({ initialAmount, ...props }: Partial<CardProps> & { initialAmount: string }) {
+  const [amount, setAmount] = useState(initialAmount);
+  return (
+    <>
+      <input aria-label="Nueva Aportación (€)" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      <AutoContributionCard
+        hasSavedTargets
+        hasUnsavedTargets={false}
+        onExecuted={() => {}}
+        {...props}
+        amount={amount}
+        onAmountChange={setAmount}
+      />
+    </>
   );
+}
+
+const renderCard = (props: Partial<CardProps> & { initialAmount?: string } = {}) =>
+  render(<Harness {...props} initialAmount={props.initialAmount ?? ""} />);
+
+/** Enciende el interruptor «Repetir automáticamente» (sin plan, la sección está plegada). */
+const enable = async () => userEvent.click(await screen.findByRole("switch", { name: "Repetir automáticamente" }));
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("AutoContributionCard", () => {
   it("sin plan permite programar una aportación trimestral", async () => {
     const fetchMock = mockApi({ plan: null, runs: [] });
-    renderCard({ suggestedAmount: 250 });
+    renderCard({ initialAmount: "250" });
 
-    const amount = await screen.findByLabelText("Importe (€)");
-    expect(amount).toHaveValue("250"); // propone el importe de «Nueva Aportación»
+    // Plegada por defecto: no hay frecuencia ni fecha hasta encender el interruptor.
+    expect(await screen.findByRole("switch", { name: "Repetir automáticamente" })).not.toBeChecked();
+    expect(screen.queryByLabelText("Primera aportación")).not.toBeInTheDocument();
+    await enable();
+    expect(screen.queryByLabelText("Importe (€)")).not.toBeInTheDocument(); // usa el importe de «Nueva Aportación»
+    const amount = screen.getByLabelText("Nueva Aportación (€)");
     await userEvent.clear(amount);
     await userEvent.type(amount, "150,50");
     await userEvent.click(screen.getByRole("combobox", { name: "Frecuencia" }));
@@ -66,9 +92,30 @@ describe("AutoContributionCard", () => {
 
   it("sin objetivos guardados no deja activarla y explica por qué", async () => {
     mockApi({ plan: null, runs: [] });
-    renderCard({ hasSavedTargets: false, suggestedAmount: 100 });
+    renderCard({ hasSavedTargets: false, initialAmount: "100" });
+    await enable();
 
     expect(await screen.findByText(/Guarda primero tus porcentajes objetivo/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activar aportación automática" })).toBeDisabled();
+  });
+
+  it("con un plan existente no hay interruptor y editar carga su importe en «Nueva Aportación»", async () => {
+    mockApi({ plan: activePlan, runs: [] });
+    renderCard({ initialAmount: "1000" });
+
+    expect(await screen.findByText(/Próxima aportación/)).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Editar" }));
+    expect(screen.getByLabelText("Nueva Aportación (€)")).toHaveValue("300");
+    expect(screen.getByLabelText("Primera aportación")).toHaveValue("2026-10-15");
+  });
+
+  it("no deja activarla con un importe menor de 1 €", async () => {
+    mockApi({ plan: null, runs: [] });
+    renderCard({ initialAmount: "0,50" });
+    await enable();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("al menos 1 €");
     expect(screen.getByRole("button", { name: "Activar aportación automática" })).toBeDisabled();
   });
 
@@ -111,8 +158,9 @@ describe("AutoContributionCard", () => {
         runs: [{ id: "1", scheduledFor: body.startDate, executedAt: "2026-10-12T10:00:00Z", amount: 100, status: "SUCCESS", purchases: 2, message: null }],
       }),
     );
-    renderCard({ suggestedAmount: 100, onExecuted });
+    renderCard({ initialAmount: "100", onExecuted });
 
+    await enable();
     await userEvent.click(await screen.findByRole("button", { name: "Activar aportación automática" }));
     expect(await screen.findByText("2 compras registradas")).toBeInTheDocument();
     expect(onExecuted).toHaveBeenCalledTimes(1);
@@ -120,8 +168,9 @@ describe("AutoContributionCard", () => {
 
   it("muestra el error del backend al guardar", async () => {
     mockApi({ plan: null, runs: [] }, () => json(422, { error: "Guarda primero tus porcentajes objetivo" }));
-    renderCard({ suggestedAmount: 100 });
+    renderCard({ initialAmount: "100" });
 
+    await enable();
     await userEvent.click(await screen.findByRole("button", { name: "Activar aportación automática" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Guarda primero tus porcentajes objetivo");
   });
@@ -131,7 +180,8 @@ describe("AutoContributionCard", () => {
     renderCard();
 
     await userEvent.click(await screen.findByRole("button", { name: "Eliminar" }));
-    expect(await screen.findByRole("button", { name: "Activar aportación automática" })).toBeInTheDocument();
+    // Sin plan vuelve el interruptor, apagado.
+    expect(await screen.findByRole("switch", { name: "Repetir automáticamente" })).not.toBeChecked();
     expect(fetchMock).toHaveBeenCalledWith("/api/contributions", expect.objectContaining({ method: "DELETE" }));
   });
 });
