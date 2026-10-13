@@ -32,6 +32,30 @@ const features: { icon: LucideIcon; title: string; description: string }[] = [
   },
 ];
 
+const screenshots = [
+  {
+    name: "rebalanceo",
+    height: 618,
+    title: "Rebalanceo inteligente",
+    description: "Indica cuánto vas a aportar y verás en qué fondos invertirlo para acercarte a tu reparto objetivo.",
+    alt: "Tabla de resultado del rebalanceo con el porcentaje actual y objetivo de cada fondo y la aportación sugerida",
+  },
+  {
+    name: "evolucion",
+    height: 573,
+    title: "Evolución de tu patrimonio",
+    description: "Compara el capital que has invertido con el valor de mercado de tu cartera a lo largo del tiempo.",
+    alt: "Gráfico de líneas con el capital invertido y el valor actual de la cartera",
+  },
+  {
+    name: "aportacion",
+    height: 243,
+    title: "Aportaciones programadas",
+    description: "Activa una aportación periódica y se repartirá sola entre tus fondos según tus objetivos.",
+    alt: "Tarjeta de aportación automática activa de 200 euros mensuales con su próxima fecha",
+  },
+];
+
 export default function LandingPage() {
   const { startDemo } = useAuth();
   const navigate = useNavigate();
@@ -63,6 +87,9 @@ export default function LandingPage() {
           <nav aria-label="Principal" className="ml-4 hidden items-center gap-1 md:flex">
             <a href="#beneficios" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Beneficios
+            </a>
+            <a href="#capturas" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
+              Capturas
             </a>
             <Link to="/forgot-password" className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground">
               Recuperar contraseña
@@ -125,6 +152,43 @@ export default function LandingPage() {
                   </CardHeader>
                   <CardContent className="text-muted-foreground">{description}</CardContent>
                 </Card>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="capturas" className="scroll-mt-14 border-t py-16">
+          <div className="mx-auto max-w-4xl px-4">
+            <h2 className="text-center text-3xl font-bold tracking-tight">Así se ve por dentro</h2>
+            <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
+              Capturas reales de la aplicación con una cartera de ejemplo.
+            </p>
+            <div className="mt-10 space-y-12">
+              {screenshots.map(({ name, height, title, description, alt }) => (
+                <figure key={name} className="space-y-4">
+                  <figcaption>
+                    <h3 className="text-xl font-semibold">{title}</h3>
+                    <p className="mt-1 text-muted-foreground">{description}</p>
+                  </figcaption>
+                  <div className="overflow-hidden rounded-xl shadow-lg ring-1 ring-foreground/10">
+                    <img
+                      src={`/screenshots/${name}-light.png`}
+                      alt={alt}
+                      width={1680}
+                      height={height}
+                      loading="lazy"
+                      className="block h-auto w-full dark:hidden"
+                    />
+                    <img
+                      src={`/screenshots/${name}-dark.png`}
+                      alt={alt}
+                      width={1680}
+                      height={height}
+                      loading="lazy"
+                      className="hidden h-auto w-full dark:block"
+                    />
+                  </div>
+                </figure>
               ))}
             </div>
           </div>
