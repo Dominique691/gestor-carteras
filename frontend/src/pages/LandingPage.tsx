@@ -159,9 +159,9 @@ export default function LandingPage() {
 
         <section id="capturas" className="scroll-mt-14 border-t py-16">
           <div className="mx-auto max-w-4xl px-4">
-            <h2 className="text-center text-3xl font-bold tracking-tight">Así se ve por dentro</h2>
+            <h2 className="text-center text-3xl font-bold tracking-tight">Tu cartera, de un vistazo</h2>
             <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
-              Capturas reales de la aplicación con una cartera de ejemplo.
+              Rebalanceo, evolución y aportaciones programadas, tal como los verás en la aplicación.
             </p>
             <div className="mt-10 space-y-12">
               {screenshots.map(({ name, height, title, description, alt }) => (
