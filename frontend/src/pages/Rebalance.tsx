@@ -177,6 +177,13 @@ export default function Rebalance() {
                   Introduce un importe válido (hasta 2 decimales).
                 </p>
               )}
+              <AutoContributionCard
+                hasSavedTargets={portfolio.targets.length > 0}
+                hasUnsavedTargets={hasUnsaved}
+                amount={contribution}
+                onAmountChange={setContribution}
+                onExecuted={() => load(false)}
+              />
             </CardContent>
           </Card>
 
@@ -400,13 +407,6 @@ export default function Rebalance() {
               )}
             </CardContent>
           </Card>
-
-          <AutoContributionCard
-            hasSavedTargets={portfolio.targets.length > 0}
-            hasUnsavedTargets={hasUnsaved}
-            suggestedAmount={contributionValue || null}
-            onExecuted={() => load(false)}
-          />
         </>
       )}
     </div>

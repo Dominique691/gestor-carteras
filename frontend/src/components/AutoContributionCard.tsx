@@ -2,9 +2,9 @@ import { CalendarClock, Loader2, Pause, Pencil, Play, Trash2 } from "lucide-reac
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, ApiError } from "@/lib/api";
 import { formatEur } from "@/lib/format";
@@ -33,52 +33,44 @@ interface Props {
   /** Sin objetivos guardados no se puede activar: el reparto se hace con ellos. */
   hasSavedTargets: boolean;
   hasUnsavedTargets: boolean;
-  /** Importe escrito en «Nueva Aportación», para proponerlo al crear el plan. */
-  suggestedAmount: number | null;
+  /** Importe escrito en «Nueva Aportación»: es también el de la aportación periódica. */
+  amount: string;
+  onAmountChange: (value: string) => void;
   /** Se llama cuando una aportación se ha ejecutado al guardar (para refrescar la cartera). */
   onExecuted: () => void;
 }
 
-/** Programación de aportaciones periódicas que se reparten solas con los objetivos guardados. */
-export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, suggestedAmount, onExecuted }: Props) {
+/**
+ * Aportación periódica dentro de «Nueva Aportación»: un interruptor despliega la frecuencia y la primera fecha
+ * junto al importe de arriba. Las aportaciones se reparten solas con los objetivos guardados.
+ */
+export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, amount, onAmountChange, onExecuted }: Props) {
   const [data, setData] = useState<Contributions | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [amount, setAmount] = useState("");
+  const [enabled, setEnabled] = useState(false);
   const [frequency, setFrequency] = useState<ContributionFrequency>("MONTHLY");
   const [startDate, setStartDate] = useState(localToday);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  /** Rellena el formulario con el plan existente o, para uno nuevo, con el importe de «Nueva Aportación». */
-  const fillForm = useCallback(
-    (p: ContributionPlan | null) => {
-      const value = p?.amount ?? suggestedAmount;
-      setAmount(value ? String(value).replace(".", ",") : "");
-      setFrequency(p?.frequency ?? "MONTHLY");
-      setStartDate(p?.startDate ?? localToday());
-      setError(null);
-    },
-    [suggestedAmount],
-  );
 
   useEffect(() => {
     api<Contributions>("/api/contributions")
       .then((d) => {
         setData(d);
         setLoadError(null);
-        if (!d.plan) fillForm(null);
       })
       .catch(() => setLoadError("No se pudo cargar la aportación automática"));
-    // Solo al montar: el importe sugerido no debe pisar lo que el usuario escriba después.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const plan = data?.plan ?? null;
-  const showForm = editing || (data !== null && !plan);
+  const showForm = editing || (data !== null && !plan && enabled);
 
   function startEditing(p: ContributionPlan) {
-    fillForm(p);
+    onAmountChange(String(p.amount).replace(".", ","));
+    setFrequency(p.frequency);
+    setStartDate(p.startDate);
+    setError(null);
     setEditing(true);
   }
 
@@ -118,7 +110,9 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
       await api("/api/contributions", { method: "DELETE" });
       setData((d) => (d ? { ...d, plan: null } : d));
       setEditing(false);
-      fillForm(null);
+      setEnabled(false);
+      setFrequency("MONTHLY");
+      setStartDate(localToday());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo conectar con el servidor");
     } finally {
@@ -127,17 +121,25 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CalendarClock className="size-5 text-primary" aria-hidden /> Aportación automática
-        </CardTitle>
-        <CardDescription>
-          Programa una aportación periódica. Cada vez se reparte entre tus fondos según los objetivos guardados, igual
-          que el rebalanceo, y las compras se registran solas al precio de ese momento.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <section aria-labelledby="auto-title" className="space-y-4 border-t pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 id="auto-title" className="flex items-center gap-2 text-sm font-medium">
+            <CalendarClock className="size-4 text-primary" aria-hidden /> Aportación automática
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Repite esta aportación cada cierto tiempo. Se reparte entre tus fondos según los objetivos guardados y las
+            compras se registran solas al precio de ese momento.
+          </p>
+        </div>
+        {data && !plan && (
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="Repetir automáticamente" disabled={busy} />
+            Repetir automáticamente
+          </label>
+        )}
+      </div>
+      <div className="space-y-4">
         {loadError && (
           <p role="alert" className="text-sm text-destructive">
             {loadError}
@@ -205,21 +207,7 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
 
         {showForm && (
           <form onSubmit={onSubmit} className="space-y-4" noValidate>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <label htmlFor="auto-amount" className="text-sm font-medium">
-                  Importe (€)
-                </label>
-                <Input
-                  id="auto-amount"
-                  inputMode="decimal"
-                  placeholder="0,00"
-                  className="tabular-nums"
-                  aria-invalid={amount !== "" && !amountOk}
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-              </div>
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <span id="auto-frequency-label" className="text-sm font-medium">
                   Frecuencia
@@ -250,9 +238,9 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
                 />
               </div>
             </div>
-            {amount !== "" && !amountOk && (
+            {!amountOk && (
               <p role="alert" className="text-sm text-destructive">
-                Introduce un importe de al menos 1 € (hasta 2 decimales).
+                Introduce arriba un importe de al menos 1 € (hasta 2 decimales) para programar la aportación.
               </p>
             )}
             <p className="text-sm text-muted-foreground">
@@ -271,7 +259,7 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
               )
             )}
             <div className="flex flex-wrap gap-2">
-              <Button type="submit" disabled={busy || !amountOk || !startDate || !hasSavedTargets}>
+              <Button type="submit" variant={plan ? "default" : "secondary"} disabled={busy || !amountOk || !startDate || !hasSavedTargets}>
                 {busy && <Loader2 className="animate-spin" />}
                 {plan ? "Guardar cambios" : "Activar aportación automática"}
               </Button>
@@ -323,7 +311,7 @@ export function AutoContributionCard({ hasSavedTargets, hasUnsavedTargets, sugge
             </Table>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
