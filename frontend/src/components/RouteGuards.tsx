@@ -1,11 +1,14 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 
-/** Solo deja pasar a usuarios autenticados; si no, redirige a /login recordando el destino. */
+/** Solo deja pasar a usuarios autenticados; si no, redirige a /login (o a la landing tras salir). */
 export function ProtectedRoute() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, signedOut } = useAuth();
   const location = useLocation();
-  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (isAuthenticated) return <Outlet />;
+  // Salida voluntaria: a la landing. Sesión caducada o acceso directo: a /login recordando el destino.
+  if (signedOut) return <Navigate to="/" replace />;
+  return <Navigate to="/login" replace state={{ from: location.pathname }} />;
 }
 
 /** Rutas solo para visitantes (login): si ya hay sesión, va al dashboard. */
