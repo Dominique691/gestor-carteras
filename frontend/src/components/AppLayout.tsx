@@ -1,5 +1,5 @@
 import { LayoutDashboard, LogOut, Scale, TrendingUp } from "lucide-react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 import { ModeToggle } from "@/components/ModeToggle";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
@@ -13,13 +13,6 @@ const links = [
 
 export function AppLayout() {
   const { user, logout } = useAuth();
-  const navigate = useNavigate();
-
-  // Al salir voluntariamente se vuelve a la landing; si la sesión caduca, ProtectedRoute lleva a /login.
-  const handleLogout = () => {
-    navigate("/", { replace: true });
-    logout();
-  };
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -47,7 +40,7 @@ export function AppLayout() {
             ))}
           </nav>
           <span className="hidden text-sm text-muted-foreground sm:inline">{user?.email}</span>
-          <Button variant="outline" size="sm" className="shrink-0" onClick={handleLogout}>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={logout}>
             <LogOut /> Salir
           </Button>
           <ModeToggle />

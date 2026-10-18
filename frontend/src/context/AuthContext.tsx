@@ -12,7 +12,10 @@ interface AuthContextValue {
   register: (email: string, password: string) => Promise<string>;
   /** Abre una cuenta de demostración nueva y vacía (el backend la crea y la borra a las 24 h). */
   startDemo: () => Promise<void>;
+  /** Cierra la sesión por decisión del usuario (a diferencia de una sesión caducada). */
   logout: () => void;
+  /** True justo después de un `logout` voluntario; `ProtectedRoute` lo usa para volver a la landing. */
+  signedOut: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -52,13 +55,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => readStorage(TOKEN_KEY));
   const [user, setUser] = useState<AuthUser | null>(readUser);
 
+  const [signedOut, setSignedOut] = useState(false);
+
   const setSession = useCallback((session: AuthResponse | null) => {
     writeSession(session);
+    setSignedOut(false);
     setToken(session?.token ?? null);
     setUser(session?.user ?? null);
   }, []);
 
-  const logout = useCallback(() => setSession(null), [setSession]);
+  const expireSession = useCallback(() => setSession(null), [setSession]);
+
+  const logout = useCallback(() => {
+    setSession(null);
+    setSignedOut(true);
+  }, [setSession]);
 
   const login = useCallback(
     async (email: string, password: string) =>
@@ -79,9 +90,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Si el backend responde 401 con un token guardado (caducado o inválido), se cierra la sesión.
   useEffect(() => {
-    setUnauthorizedHandler(logout);
+    setUnauthorizedHandler(expireSession);
     return () => setUnauthorizedHandler(null);
-  }, [logout]);
+  }, [expireSession]);
 
   // Mantiene sincronizadas varias pestañas: login/logout en una se refleja en las demás.
   useEffect(() => {
@@ -95,8 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ token, user, isAuthenticated: token !== null, login, register, startDemo, logout }),
-    [token, user, login, register, startDemo, logout],
+    () => ({ token, user, isAuthenticated: token !== null, login, register, startDemo, logout, signedOut }),
+    [token, user, login, register, startDemo, logout, signedOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
